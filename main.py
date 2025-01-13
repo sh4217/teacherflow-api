@@ -21,7 +21,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Path to Next.js public/generated-videos directory
 VIDEOS_DIR = Path("videos")  # This will be relative to where the app is running
 
 # Ensure the directory exists on startup
