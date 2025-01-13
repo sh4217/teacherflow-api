@@ -1,8 +1,6 @@
 version: 1.0
-# Tells App Runner you want to build from your Dockerfile instead of using a runtime
 build:
-  commands:
-    - dockerfile_path: ./Dockerfile
+  dockerfile_path: ./Dockerfile
 run:
   network:
     port: 8000
