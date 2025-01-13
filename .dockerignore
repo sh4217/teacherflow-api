@@ -3,6 +3,4 @@ __pycache__
 .env
 .git
 .gitignore
-videos/*
-!videos/.gitkeep
 venv/
