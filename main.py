@@ -1,5 +1,5 @@
 from audio_utils import validate_audio_file, get_audio_duration
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Body
 from fastapi.middleware.cors import CORSMiddleware
 from uuid import uuid4
 from typing import Optional, List
@@ -25,7 +25,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "https://teacherflow.ai", "https://www.teacherflow.ai"],
     allow_credentials=True,
-    allow_methods=["POST", "GET", "OPTIONS"],
+    allow_methods=["POST", "GET", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type"],
 )
 
@@ -158,5 +158,33 @@ async def generate_video(
                 Path(temp_file).unlink()
             except Exception:
                 pass
+
+@app.delete("/delete/videos")
+async def delete_videos(filenames: List[str] = Body(...)):
+    print(f"=== DEBUG: Bulk delete request for {len(filenames)} videos ===")
+    
+    results = []
+    for filename in filenames:
+        if "/" in filename or "\\" in filename:
+            print(f"=== DEBUG: Skipping invalid filename: {filename} ===")
+            results.append({"filename": filename, "status": "error", "message": "Invalid filename"})
+            continue
+            
+        video_path = VIDEOS_DIR / filename
+        try:
+            if not video_path.exists():
+                print(f"=== DEBUG: Video file not found: {video_path} ===")
+                results.append({"filename": filename, "status": "error", "message": "File not found"})
+                continue
+                
+            video_path.unlink()
+            print(f"=== DEBUG: Successfully deleted video: {video_path} ===")
+            results.append({"filename": filename, "status": "success", "message": "Deleted"})
+            
+        except Exception as e:
+            print(f"=== ERROR: Failed to delete video {filename}: {e} ===")
+            results.append({"filename": filename, "status": "error", "message": str(e)})
+    
+    return {"results": results}
 
 print("=== DEBUG: Finished loading main.py ===")
