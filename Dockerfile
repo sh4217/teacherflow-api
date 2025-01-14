@@ -1,7 +1,13 @@
-FROM python:3.11-slim
+FROM python:3.11
+
+# Set environment variable for Python unbuffered output
+ENV PYTHONUNBUFFERED=1
 
 # Install system dependencies required for Manim
-RUN apt-get update && apt-get install -y \
+RUN echo "Starting system dependencies installation..." && \
+    apt-get update && \
+    echo "Installing required packages..." && \
+    apt-get install -y \
     ffmpeg \
     texlive \
     texlive-latex-extra \
@@ -15,27 +21,35 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
     build-essential \
     curl \
-    && rm -rf /var/lib/apt/lists/*
+    && echo "Cleaning up apt cache..." && \
+    rm -rf /var/lib/apt/lists/* && \
+    echo "System dependencies installation complete."
 
 # Set working directory
 WORKDIR /app
+RUN echo "Working directory set to /app"
 
 # Copy requirements first to leverage Docker cache
 COPY requirements.txt .
+RUN echo "Copied requirements.txt to container"
 
 # Upgrade pip first, then install dependencies
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+RUN echo "Starting Python dependencies installation..." && \
+    pip install --no-cache-dir --upgrade pip && \
+    echo "Pip upgraded successfully, installing requirements..." && \
+    pip install --no-cache-dir -r requirements.txt && \
+    echo "Python dependencies installation complete."
 
 # Copy application code
 COPY . .
+RUN echo "Copied application code to container"
 
 # Expose port
 EXPOSE 8000
+RUN echo "Exposed port 8000"
 
-# Add healthcheck
-HEALTHCHECK --interval=60s --timeout=3s --start-period=30s --retries=3 \
-  CMD curl -f http://localhost:8000/health || exit 1
+# Use RUN for the echo statement
+RUN echo "Starting FastAPI application with Uvicorn..."
 
-# Command to run the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"] 
+# Use JSON array syntax for CMD
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--log-level", "debug"]
