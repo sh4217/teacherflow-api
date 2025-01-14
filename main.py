@@ -159,7 +159,7 @@ async def generate_video(
             except Exception:
                 pass
 
-@app.delete("/delete/videos")
+@app.api_route("/delete/videos", methods=["POST", "DELETE"])
 async def delete_videos(filenames: List[str] = Body(...)):
     print(f"=== DEBUG: Bulk delete request for {len(filenames)} videos ===")
     
