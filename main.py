@@ -1,38 +1,16 @@
-import os
-import sys
+from audio_utils import validate_audio_file, get_audio_duration
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi.middleware.cors import CORSMiddleware
+from uuid import uuid4
+from typing import Optional, List
+from pathlib import Path
+from manim import *
+import tempfile
+import shutil
+from fastapi.staticfiles import StaticFiles
+from contextlib import asynccontextmanager
 
 print("=== DEBUG: Entering main.py file ===")
-
-try:
-    from audio_utils import validate_audio_file, get_audio_duration
-    print("=== DEBUG: Imported audio_utils successfully ===")
-except Exception as e:
-    print(f"=== ERROR: Failed to import audio_utils: {e}")
-    sys.exit(1)  # Exit early so we see the error in logs
-
-try:
-    from fastapi import FastAPI, HTTPException, UploadFile, File, Form
-    from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import JSONResponse
-    print("=== DEBUG: Imported FastAPI and related modules successfully ===")
-except Exception as e:
-    print(f"=== ERROR: Failed to import FastAPI or related modules: {e}")
-    sys.exit(1)
-
-try:
-    from uuid import uuid4
-    from typing import Optional, List
-    from pathlib import Path
-    from manim import *
-    import tempfile
-    import shutil
-    from fastapi.staticfiles import StaticFiles
-    print("=== DEBUG: Imported other dependencies (uuid, manim, etc.) successfully ===")
-except Exception as e:
-    print(f"=== ERROR: Failed to import one of the dependencies (manim, etc.): {e}")
-    sys.exit(1)
-
-from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -47,8 +25,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "https://teacherflow.ai", "https://www.teacherflow.ai"],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["POST", "GET", "OPTIONS"],
+    allow_headers=["Content-Type"],
 )
 
 VIDEOS_DIR = Path("videos")
@@ -128,7 +106,6 @@ async def generate_video(
     try:
         VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
         
-        from uuid import uuid4
         video_filename = f"{uuid4()}.mp4"
         video_path = VIDEOS_DIR / video_filename
         print(f"=== DEBUG: Generated video filename: {video_filename} ===")
@@ -140,8 +117,6 @@ async def generate_video(
                 print(f"=== DEBUG: Audio file invalid: {error_message} ===")
                 raise HTTPException(status_code=400, detail=error_message)
             
-            import tempfile
-            import shutil
             with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as temp_audio:
                 shutil.copyfileobj(audio.file, temp_audio)
                 audio_paths.append(temp_audio.name)
@@ -153,7 +128,6 @@ async def generate_video(
             for text, audio_path in zip(texts, audio_paths)
         ]
 
-        import tempfile
         with tempfile.TemporaryDirectory() as temp_dir:
             config.media_dir = temp_dir
             config.quality = "medium_quality"
