@@ -1,5 +1,5 @@
-from fastapi import UploadFile
-from typing import Optional, Tuple
+from fastapi import UploadFile, HTTPException
+from typing import Optional, Tuple, List
 from pathlib import Path
 import tempfile
 import mutagen
@@ -28,7 +28,16 @@ def get_audio_duration(file_path: str) -> float:
         return 5.0  # Default duration if there's an error
 
 def validate_audio_file(file: UploadFile) -> Tuple[bool, Optional[str]]:
-    """Validate audio file format, size, and integrity."""
+    """Validate audio file format, size, and integrity.
+    
+    Args:
+        file (UploadFile): The uploaded audio file to validate
+        
+    Returns:
+        Tuple containing:
+        - bool: True if file is valid, False otherwise
+        - Optional[str]: Error message if validation fails, None if successful
+    """
     try:
         # Check content type
         if file.content_type not in ALLOWED_AUDIO_TYPES:
@@ -73,3 +82,34 @@ def validate_audio_file(file: UploadFile) -> Tuple[bool, Optional[str]]:
             
     except Exception as e:
         return False, f"Error validating audio: {str(e)}" 
+
+async def process_audio_files(audio_files: List[UploadFile]) -> Tuple[List[str], List[str]]:
+    """Process uploaded audio files and return paths to temp files
+    
+    Args:
+        audio_files: List of uploaded audio files
+        
+    Returns:
+        Tuple containing:
+        - List of paths to processed audio files
+        - List of temporary files to clean up
+        
+    Raises:
+        HTTPException: If any audio file is invalid
+    """
+    audio_paths = []
+    temp_files = []
+    
+    for audio in audio_files:
+        is_valid, error_message = validate_audio_file(audio)
+        if not is_valid:
+            print(f"=== DEBUG: Audio file invalid: {error_message} ===")
+            raise HTTPException(status_code=400, detail=error_message)
+        
+        with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as temp_audio:
+            shutil.copyfileobj(audio.file, temp_audio)
+            audio_paths.append(temp_audio.name)
+            temp_files.append(temp_audio.name)
+            print(f"=== DEBUG: Wrote temp audio file to {temp_audio.name} ===")
+    
+    return audio_paths, temp_files 
