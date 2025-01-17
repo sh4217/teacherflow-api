@@ -1,4 +1,4 @@
-FROM python:3.11
+FROM python:3.11-slim
 
 # Set environment variable for Python unbuffered output
 ENV PYTHONUNBUFFERED=1
