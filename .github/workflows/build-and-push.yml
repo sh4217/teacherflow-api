@@ -31,7 +31,12 @@ jobs:
         push: true
         tags: ${{ secrets.DOCKERHUB_USERNAME }}/teacherflow-api:latest
 
-    # Optional Step 4: Verify the built image
+
+    # Step 4: Install jq for JSON parsing
+    - name: Install jq
+      run: sudo apt-get update && sudo apt-get install -y jq
+
+    # Step 5: Verify the built image
     - name: Show built image details
       run: |
         echo "Listing images in DockerHub repository..."
