@@ -1,43 +1,37 @@
-name: Build and Push Docker Image
+name: Build and Push Docker Image to ECR
 
 on:
   push:
     branches:
-      - "main"  # Trigger when changes are pushed to the main branch
+      - main  # Trigger only on pushes to the main branch
 
 jobs:
   build-and-push:
-    runs-on: ubuntu-latest # Runs on an x86-based runner
+    runs-on: ubuntu-latest
 
     steps:
-    # Step 1: Check out your repository
-    - name: Check out code
-      uses: actions/checkout@v3
+      # Step 1: Check out the code
+      - name: Check out the repository
+        uses: actions/checkout@v3
 
-    # Step 2: Log in to DockerHub
-    - name: Log in to DockerHub
-      uses: docker/login-action@v2
-      with:
-        registry: docker.io
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_PASSWORD }}
+      # Step 2: Log in to Amazon ECR
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v1
 
-    # Step 3: Build and push the Docker image
-    - name: Build and push
-      uses: docker/build-push-action@v4
-      with:
-        context: .
-        platforms: linux/amd64
-        push: true
-        tags: ${{ secrets.DOCKERHUB_USERNAME }}/teacherflow-api:latest
+      # Step 3: Build and tag the Docker image
+      - name: Build and tag Docker image
+        run: |
+          IMAGE_URI=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY_NAME }}
+          docker build -t $IMAGE_URI:latest .
+          docker tag $IMAGE_URI:latest $IMAGE_URI:latest
 
+      # Step 4: Push the image to Amazon ECR
+      - name: Push Docker image to ECR
+        run: |
+          IMAGE_URI=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY_NAME }}
+          docker push $IMAGE_URI:latest
 
-    # Step 4: Install jq for JSON parsing
-    - name: Install jq
-      run: sudo apt-get update && sudo apt-get install -y jq
-
-    # Step 5: Verify the built image
-    - name: Show built image details
-      run: |
-        echo "Listing images in DockerHub repository..."
-        curl -s https://hub.docker.com/v2/repositories/${{ secrets.DOCKERHUB_USERNAME }}/teacherflow-api/tags/ | jq '.'
+      # Step 5: Output ECR image URI
+      - name: Output ECR image URI
+        run: |
+          echo "ECR Image URI: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY_NAME }}"
