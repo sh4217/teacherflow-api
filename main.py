@@ -1,5 +1,5 @@
-from audio_utils import validate_audio_file, get_audio_duration, process_audio_files
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Body
+from audio_utils import  process_audio_files
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Body, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from uuid import uuid4
 from typing import List
@@ -10,6 +10,28 @@ import shutil
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from manim_utils import SceneSegment, CombinedScript
+from enum import Enum
+from datetime import datetime
+from typing import Dict, Optional
+# from fastapi import BackgroundTasks  # Add this import
+
+class JobStatus(Enum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+class VideoJob:
+    def __init__(self, job_id: str):
+        self.job_id = job_id
+        self.status = JobStatus.PENDING
+        self.progress = 0
+        self.created_at = datetime.now()
+        self.video_url: Optional[str] = None
+        self.error: Optional[str] = None
+
+# In-memory job storage
+active_jobs: Dict[str, VideoJob] = {}
 
 print("=== DEBUG: Entering main.py file ===")
 
@@ -27,7 +49,8 @@ app.add_middleware(
     allow_origins=["http://localhost:3000", "https://teacherflow.ai", "https://www.teacherflow.ai"],
     allow_credentials=True,
     allow_methods=["POST", "GET", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "Authorization"],
+    expose_headers=["Content-Type", "Content-Length"]
 )
 
 VIDEOS_DIR = Path("videos")
@@ -40,8 +63,26 @@ app.mount("/videos", StaticFiles(directory="videos"), name="videos")
 print("=== DEBUG: Defining health-check endpoint ===")
 
 @app.get("/health")
-async def health_check():
+async def health_check(job_id: Optional[str] = None):
     print("=== DEBUG: /health endpoint was hit ===")
+    if job_id is not None and job_id in active_jobs:
+        job = active_jobs[job_id]
+        # Construct full video URL if available
+        if job.video_url:
+            video_url = f"/videos/{job.video_url}"
+            print(f"=== DEBUG: Job status: {job.status.value}, progress: {job.progress}, video URL: {video_url} ===")
+        else:
+            video_url = None
+            print(f"=== DEBUG: Job status: {job.status.value}, progress: {job.progress}, no video URL yet ===")
+        return {
+            "status": "healthy",
+            "job": {
+                "status": job.status.value,
+                "progress": job.progress,
+                "error": job.error,
+                "videoUrl": video_url
+            }
+        }
     return {"status": "healthy"}
 
 print("=== DEBUG: Defining /generate-video endpoint ===")
@@ -89,15 +130,80 @@ def cleanup_temp_files(temp_files: List[str]):
 
 @app.post("/generate-video")
 async def generate_video(
+    background_tasks: BackgroundTasks,
     texts: List[str] = Form(...),
     audio_files: List[UploadFile] = File(...)
 ):
     print("=== DEBUG: /generate-video endpoint called ===")
+    print(f"=== DEBUG: Received {len(texts)} texts and {len(audio_files)} audio files ===")
+    
+    # Create job
+    job_id = str(uuid4())
+    job = VideoJob(job_id)
+    active_jobs[job_id] = job
+    
+    # Save audio files to temporary files
     temp_files = []
+    try:
+        # Validate request first
+        await validate_request(texts, audio_files)
+        
+        for i, audio_file in enumerate(audio_files):
+            print(f"=== DEBUG: Processing audio file {i + 1}/{len(audio_files)} ===")
+            print(f"=== DEBUG: File info - filename: {audio_file.filename}, content_type: {audio_file.content_type} ===")
+            
+            with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as temp_file:
+                try:
+                    content = await audio_file.read()
+                    print(f"=== DEBUG: Read {len(content)} bytes from audio file ===")
+                    temp_file.write(content)
+                    temp_files.append(temp_file.name)
+                    await audio_file.seek(0)  # Reset file pointer
+                except Exception as e:
+                    print(f"=== ERROR: Failed to process audio file {i + 1}: {str(e)} ===")
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Failed to process audio file {audio_file.filename}: {str(e)}"
+                    )
+    except Exception as e:
+        print(f"=== ERROR: Failed to save audio files: {str(e)} ===")
+        # Clean up temp files if there's an error
+        cleanup_temp_files(temp_files)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error saving audio files: {str(e)}"
+        )
     
     try:
-        # Validate request
-        await validate_request(texts, audio_files)
+        # Start async processing with saved files
+        background_tasks.add_task(
+            process_video_job,
+            job,
+            texts,
+            temp_files
+        )
+        
+        return {"jobId": job_id}
+    except Exception as e:
+        print(f"=== ERROR: Failed to start background task: {str(e)} ===")
+        # Clean up on background task creation failure
+        cleanup_temp_files(temp_files)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to start video generation: {str(e)}"
+        )
+
+async def process_video_job(
+    job: VideoJob,
+    texts: List[str],
+    temp_files: List[str]
+):
+    print(f"=== DEBUG: Starting video job {job.job_id} ===")
+    
+    try:
+        job.status = JobStatus.PROCESSING
+        job.progress = 25
+        print(f"=== DEBUG: Job {job.job_id} - Starting processing ===")
         
         # Ensure videos directory exists
         VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
@@ -107,23 +213,31 @@ async def generate_video(
         video_path = VIDEOS_DIR / video_filename
         print(f"=== DEBUG: Generated video filename: {video_filename} ===")
         
-        # Process audio files
-        audio_paths, temp_files = await process_audio_files(audio_files)
-        
-        # Create scene segments
-        segments = create_scene_segments(texts, audio_paths)
+        # Create scene segments directly from temp files
+        segments = create_scene_segments(texts, temp_files)
+        job.progress = 50
+        print(f"=== DEBUG: Job {job.job_id} - Scene segments created ===")
         
         # Render video and copy to destination
         await render_video(segments, video_path)
+        job.progress = 75
+        print(f"=== DEBUG: Job {job.job_id} - Video rendered ===")
         
-        return {"videoUrl": video_filename}
+        # Complete job
+        job.progress = 100
+        job.status = JobStatus.COMPLETED
+        job.video_url = video_filename
+        print(f"=== DEBUG: Job {job.job_id} - Video generation completed ===")
+        print(f"=== DEBUG: Video URL set to: {job.video_url} ===")
+        print(f"=== DEBUG: Full video path: {video_path.resolve()} ===")
         
-    except HTTPException:
-        raise
     except Exception as e:
-        print(f"=== ERROR: Exception in /generate-video: {e}")
+        job.status = JobStatus.FAILED
+        job.error = str(e)
+        print(f"=== ERROR: Exception in job {job.job_id}: {e} ===")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
+        # Clean up all temporary files
         cleanup_temp_files(temp_files)
 
 @app.api_route("/delete/videos", methods=["POST", "DELETE"])
@@ -131,26 +245,36 @@ async def delete_videos(filenames: List[str] = Body(...)):
     print(f"=== DEBUG: Bulk delete request for {len(filenames)} videos ===")
     
     results = []
-    for filename in filenames:
-        if "/" in filename or "\\" in filename:
-            print(f"=== DEBUG: Skipping invalid filename: {filename} ===")
-            results.append({"filename": filename, "status": "error", "message": "Invalid filename"})
-            continue
-            
-        video_path = VIDEOS_DIR / filename
+    for full_url in filenames:
         try:
+            # Extract filename from full URL
+            # Handle both full URLs and direct filenames
+            if full_url.startswith('http'):
+                filename = full_url.split('/videos/')[-1]
+            else:
+                filename = full_url
+                
+            print(f"=== DEBUG: Extracted filename: {filename} ===")
+            
+            # Basic security check
+            if "/" in filename or "\\" in filename:
+                print(f"=== DEBUG: Invalid filename: {filename} ===")
+                results.append({"filename": full_url, "status": "error", "message": "Invalid filename"})
+                continue
+                
+            video_path = VIDEOS_DIR / filename
             if not video_path.exists():
                 print(f"=== DEBUG: Video file not found: {video_path} ===")
-                results.append({"filename": filename, "status": "error", "message": "File not found"})
+                results.append({"filename": full_url, "status": "error", "message": "File not found"})
                 continue
                 
             video_path.unlink()
             print(f"=== DEBUG: Successfully deleted video: {video_path} ===")
-            results.append({"filename": filename, "status": "success", "message": "Deleted"})
+            results.append({"filename": full_url, "status": "success", "message": "Deleted"})
             
         except Exception as e:
-            print(f"=== ERROR: Failed to delete video {filename}: {e} ===")
-            results.append({"filename": filename, "status": "error", "message": str(e)})
+            print(f"=== ERROR: Failed to delete video {full_url}: {e} ===")
+            results.append({"filename": full_url, "status": "error", "message": str(e)})
     
     return {"results": results}
 
