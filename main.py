@@ -1,4 +1,4 @@
-from audio_utils import validate_audio_file, get_audio_duration, process_audio_files
+from audio_utils import process_audio_files
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Body
 from fastapi.middleware.cors import CORSMiddleware
 from uuid import uuid4
