@@ -1,8 +1,8 @@
 from audio_utils import process_audio_files
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Body
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Body, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from uuid import uuid4
-from typing import List
+from typing import List, Dict, Optional, Set
 from pathlib import Path
 from manim import *
 import tempfile
@@ -10,8 +10,67 @@ import shutil
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from manim_utils import SceneSegment, CombinedScript
+from enum import Enum
+from pydantic import BaseModel
+import asyncio
 
 print("=== DEBUG: Entering main.py file ===")
+
+class ConnectionManager:
+    def __init__(self):
+        # job_id -> Set[WebSocket]
+        self.active_connections: Dict[str, Set[WebSocket]] = {}
+        print("=== DEBUG: Initialized WebSocket connection manager ===")
+    
+    async def connect(self, websocket: WebSocket, job_id: str):
+        await websocket.accept()
+        if job_id not in self.active_connections:
+            self.active_connections[job_id] = set()
+        self.active_connections[job_id].add(websocket)
+        print(f"=== DEBUG: New WebSocket connection for job {job_id} ===")
+    
+    def disconnect(self, websocket: WebSocket, job_id: str):
+        if job_id in self.active_connections:
+            self.active_connections[job_id].discard(websocket)
+            if not self.active_connections[job_id]:
+                del self.active_connections[job_id]
+        print(f"=== DEBUG: WebSocket disconnected for job {job_id} ===")
+    
+    async def broadcast_job_update(self, job_id: str, data: dict):
+        if job_id in self.active_connections:
+            dead_connections = set()
+            for connection in self.active_connections[job_id]:
+                try:
+                    await connection.send_json(data)
+                except WebSocketDisconnect:
+                    dead_connections.add(connection)
+                except Exception as e:
+                    print(f"=== ERROR: Failed to send WebSocket message: {e} ===")
+                    dead_connections.add(connection)
+            
+            # Clean up dead connections
+            for dead in dead_connections:
+                self.disconnect(dead, job_id)
+
+# Create a connection manager instance
+manager = ConnectionManager()
+
+# Job status enum
+class JobStatus(str, Enum):
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+# Job metadata model
+class JobMetadata(BaseModel):
+    job_id: str
+    status: JobStatus
+    progress: float = 0.0
+    videoUrl: Optional[str] = None
+
+# In-memory job store
+jobs: Dict[str, JobMetadata] = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -43,6 +102,28 @@ print("=== DEBUG: Defining health-check endpoint ===")
 async def health_check():
     print("=== DEBUG: /health endpoint was hit ===")
     return {"status": "healthy"}
+
+@app.get("/debug/jobs/{job_id}")
+async def get_job_status(job_id: str):
+    """Debug endpoint to get job status"""
+    print(f"=== DEBUG: Getting status for job {job_id} ===")
+    print(f"=== DEBUG: Current jobs in store: {jobs} ===")
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return jobs[job_id]
+
+@app.post("/debug/jobs")
+async def create_test_job():
+    """Debug endpoint to create a test job"""
+    job_id = str(uuid4())
+    jobs[job_id] = JobMetadata(
+        job_id=job_id,
+        status=JobStatus.PENDING,
+        progress=0.0
+    )
+    print(f"=== DEBUG: Created test job {job_id} ===")
+    print(f"=== DEBUG: Current jobs in store: {jobs} ===")
+    return {"job_id": job_id}
 
 print("=== DEBUG: Defining /generate-video endpoint ===")
 
@@ -87,45 +168,6 @@ def cleanup_temp_files(temp_files: List[str]):
         except Exception:
             pass
 
-@app.post("/generate-video")
-async def generate_video(
-    texts: List[str] = Form(...),
-    audio_files: List[UploadFile] = File(...)
-):
-    print("=== DEBUG: /generate-video endpoint called ===")
-    temp_files = []
-    
-    try:
-        # Validate request
-        await validate_request(texts, audio_files)
-        
-        # Ensure videos directory exists
-        VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
-        
-        # Generate unique filename
-        video_filename = f"{uuid4()}.mp4"
-        video_path = VIDEOS_DIR / video_filename
-        print(f"=== DEBUG: Generated video filename: {video_filename} ===")
-        
-        # Process audio files
-        audio_paths, temp_files = await process_audio_files(audio_files)
-        
-        # Create scene segments
-        segments = create_scene_segments(texts, audio_paths)
-        
-        # Render video and copy to destination
-        await render_video(segments, video_path)
-        
-        return {"videoUrl": video_filename}
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"=== ERROR: Exception in /generate-video: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        cleanup_temp_files(temp_files)
-
 @app.api_route("/delete/videos", methods=["POST", "DELETE"])
 async def delete_videos(filenames: List[str] = Body(...)):
     print(f"=== DEBUG: Bulk delete request for {len(filenames)} videos ===")
@@ -153,5 +195,189 @@ async def delete_videos(filenames: List[str] = Body(...)):
             results.append({"filename": filename, "status": "error", "message": str(e)})
     
     return {"results": results}
+
+async def process_video_job(
+    job_id: str,
+    texts: List[str],
+    audio_files: List[UploadFile]
+):
+    """Background task to process the video generation job"""
+    temp_files = []
+    
+    try:
+        # Update job status to in_progress
+        jobs[job_id].status = JobStatus.IN_PROGRESS
+        jobs[job_id].progress = 10
+        await manager.broadcast_job_update(job_id, jobs[job_id].dict())
+        await asyncio.sleep(0.1)
+        
+        # Validate request
+        await validate_request(texts, audio_files)
+        jobs[job_id].progress = 20
+        await manager.broadcast_job_update(job_id, jobs[job_id].dict())
+        await asyncio.sleep(0.1)
+        
+        # Ensure videos directory exists
+        VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
+        
+        # Generate unique filename for the video
+        video_filename = f"{uuid4()}.mp4"
+        video_path = VIDEOS_DIR / video_filename
+        
+        # Process audio files
+        audio_paths, new_temp_files = await process_audio_files(audio_files)
+        temp_files.extend(new_temp_files)
+        jobs[job_id].progress = 40
+        await manager.broadcast_job_update(job_id, jobs[job_id].dict())
+        await asyncio.sleep(0.1)
+        
+        try:
+            # Create scene segments
+            segments = create_scene_segments(texts, audio_paths)
+            jobs[job_id].progress = 60
+            await manager.broadcast_job_update(job_id, jobs[job_id].dict())
+            await asyncio.sleep(0.1)
+            
+            # Render video
+            await render_video(segments, video_path)
+            jobs[job_id].progress = 90
+            await manager.broadcast_job_update(job_id, jobs[job_id].dict())
+            await asyncio.sleep(0.1)
+            
+            # Update job with success
+            jobs[job_id].status = JobStatus.COMPLETED
+            jobs[job_id].progress = 100
+            jobs[job_id].videoUrl = video_filename
+            await manager.broadcast_job_update(job_id, jobs[job_id].dict())
+            
+        finally:
+            # Clean up all temporary files
+            cleanup_temp_files(temp_files)
+            # Clean up the uploaded files
+            for audio_file in audio_files:
+                try:
+                    audio_file.file.close()
+                    if hasattr(audio_file, 'filename') and isinstance(audio_file.filename, str):
+                        try:
+                            Path(audio_file.filename).unlink()
+                        except:
+                            pass
+                except:
+                    pass
+            
+    except Exception as e:
+        print(f"=== ERROR: Exception in video processing job {job_id}: {e}")
+        jobs[job_id].status = JobStatus.FAILED
+        jobs[job_id].progress = 0
+        await manager.broadcast_job_update(job_id, jobs[job_id].dict())
+        raise
+
+@app.post("/generate-video")
+async def generate_video(
+    background_tasks: BackgroundTasks,
+    texts: List[str] = Form(...),
+    audio_files: List[UploadFile] = File(...)
+):
+    """Start a video generation job and return immediately with a job ID"""
+    print("=== DEBUG: /start-generate-video endpoint called ===")
+    
+    # Create a new job
+    job_id = str(uuid4())
+    jobs[job_id] = JobMetadata(
+        job_id=job_id,
+        status=JobStatus.PENDING,
+        progress=0
+    )
+    
+    # Save audio files to temporary files
+    temp_audio_files = []
+    saved_audio_files = []
+    
+    try:
+        for audio_file in audio_files:
+            # Create a temporary file with the audio content
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
+            temp_audio_files.append(temp_file.name)
+            
+            # Read content and save to temp file
+            content = await audio_file.read()
+            temp_file.write(content)
+            temp_file.close()
+            
+            # Reopen the file for reading
+            with open(temp_file.name, 'rb') as file_handle:
+                # Create a SpooledTemporaryFile for the UploadFile
+                spooled_file = tempfile.SpooledTemporaryFile()
+                shutil.copyfileobj(file_handle, spooled_file)
+                spooled_file.seek(0)
+            
+            # Create the UploadFile with the spooled content
+            saved_file = UploadFile(
+                file=spooled_file,
+                filename=audio_file.filename or "audio.mp3",
+                headers={"content-type": "audio/mpeg"}
+            )
+            saved_audio_files.append(saved_file)
+    
+        # Schedule the background task with saved files
+        background_tasks.add_task(
+            process_video_job,
+            job_id=job_id,
+            texts=texts,
+            audio_files=saved_audio_files
+        )
+        
+        return {"job_id": job_id}
+        
+    except Exception as e:
+        # Clean up temp files if there's an error
+        for temp_file in temp_audio_files:
+            try:
+                Path(temp_file).unlink()
+            except:
+                pass
+        print(f"=== ERROR: Exception in start_generate_video: {str(e)} ===")
+        raise
+
+@app.websocket("/ws/{job_id}")
+async def websocket_endpoint(websocket: WebSocket, job_id: str):
+    """WebSocket endpoint for real-time job updates"""
+    try:
+        await manager.connect(websocket, job_id)
+        
+        # Send initial job status if job exists
+        if job_id in jobs:
+            await websocket.send_json(jobs[job_id].dict())
+        
+        try:
+            # Keep the connection alive and handle any incoming messages
+            while True:
+                try:
+                    # Wait for a message with a 30 second timeout
+                    data = await asyncio.wait_for(
+                        websocket.receive_text(),
+                        timeout=30.0
+                    )
+                    # Send heartbeat response
+                    if data == "ping":
+                        await websocket.send_json({"type": "pong"})
+                    else:
+                        # Handle regular messages
+                        await websocket.send_json({"message": f"Received: {data}"})
+                except asyncio.TimeoutError:
+                    try:
+                        # Send a ping to check if client is still there
+                        await websocket.send_json({"type": "ping"})
+                    except:
+                        # If ping fails, client is disconnected
+                        break
+        except WebSocketDisconnect:
+            manager.disconnect(websocket, job_id)
+    except Exception as e:
+        print(f"=== ERROR: WebSocket error for job {job_id}: {e} ===")
+        try:
+            manager.disconnect(websocket, job_id)
+        except:
+            pass
 
 print("=== DEBUG: Finished loading main.py ===")
