@@ -305,13 +305,11 @@ async def generate_video(
             temp_file.close()
             
             # Reopen the file for reading
-            file_handle = open(temp_file.name, 'rb')
-            
-            # Create a SpooledTemporaryFile for the UploadFile
-            spooled_file = tempfile.SpooledTemporaryFile()
-            shutil.copyfileobj(file_handle, spooled_file)
-            spooled_file.seek(0)
-            file_handle.close()
+            with open(temp_file.name, 'rb') as file_handle:
+                # Create a SpooledTemporaryFile for the UploadFile
+                spooled_file = tempfile.SpooledTemporaryFile()
+                shutil.copyfileobj(file_handle, spooled_file)
+                spooled_file.seek(0)
             
             # Create the UploadFile with the spooled content
             saved_file = UploadFile(
@@ -354,9 +352,25 @@ async def websocket_endpoint(websocket: WebSocket, job_id: str):
         try:
             # Keep the connection alive and handle any incoming messages
             while True:
-                data = await websocket.receive_text()
-                # For now, we just echo back any received messages
-                await websocket.send_json({"message": f"Received: {data}"})
+                try:
+                    # Wait for a message with a 30 second timeout
+                    data = await asyncio.wait_for(
+                        websocket.receive_text(),
+                        timeout=30.0
+                    )
+                    # Send heartbeat response
+                    if data == "ping":
+                        await websocket.send_json({"type": "pong"})
+                    else:
+                        # Handle regular messages
+                        await websocket.send_json({"message": f"Received: {data}"})
+                except asyncio.TimeoutError:
+                    try:
+                        # Send a ping to check if client is still there
+                        await websocket.send_json({"type": "ping"})
+                    except:
+                        # If ping fails, client is disconnected
+                        break
         except WebSocketDisconnect:
             manager.disconnect(websocket, job_id)
     except Exception as e:
