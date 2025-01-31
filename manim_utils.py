@@ -91,34 +91,34 @@ def fetch_manim_construct_snippet_from_openai() -> str:
         return ""
 
 
-# # -------------------------------------------------------------------
-# # 2) Fallback: The original snippet (verbatim from your code)
-# # -------------------------------------------------------------------
-# _original_construct_snippet = '''"""Construct the scene with all segments."""
-# frame_height = config.frame_height
+# -------------------------------------------------------------------
+# 2) Fallback: The original snippet (verbatim from your code)
+# -------------------------------------------------------------------
+_original_construct_snippet = '''"""Construct the scene with all segments."""
+frame_height = config.frame_height
 
-# for i, segment in enumerate(self.segments):
-#     self.remove(*self.mobjects)
-#     text = self.create_text(segment.text, self.INITIAL_FONT_SIZE)
-#     while text.height > frame_height * 0.85 and text.font_size > self.MIN_FONT_SIZE:
-#         new_size = max(self.MIN_FONT_SIZE, text.font_size * 0.95)
-#         text = self.create_text(segment.text, new_size)
-#     text.move_to(ORIGIN)
-#     self.add(text)
+for i, segment in enumerate(self.segments):
+    self.remove(*self.mobjects)
+    text = self.create_text(segment.text, self.INITIAL_FONT_SIZE)
+    while text.height > frame_height * 0.85 and text.font_size > self.MIN_FONT_SIZE:
+        new_size = max(self.MIN_FONT_SIZE, text.font_size * 0.95)
+        text = self.create_text(segment.text, new_size)
+    text.move_to(ORIGIN)
+    self.add(text)
     
-#     if segment.has_audio:
-#         try:
-#             self.add_sound(segment.audio_path)
-#             self.wait(segment.duration)
-#         except Exception as e:
-#             print(f"Audio playback failed for scene {i}: {e}")
-#             self.wait(5)
-#     else:
-#         self.wait(5)
+    if segment.has_audio:
+        try:
+            self.add_sound(segment.audio_path)
+            self.wait(segment.duration)
+        except Exception as e:
+            print(f"Audio playback failed for scene {i}: {e}")
+            self.wait(5)
+    else:
+        self.wait(5)
     
-#     if i < len(self.segments) - 1:
-#         self.wait(0.25)
-# '''
+    if i < len(self.segments) - 1:
+        self.wait(0.25)
+'''
 
 class SceneSegment:
     def __init__(self, text: str, audio_path: Optional[str] = None):
@@ -167,11 +167,15 @@ class CombinedScript(Scene):
         Dynamically fetch and execute the Manim construct snippet from OpenAI;
         if the snippet is empty or invalid, fall back to the original snippet.
         """
-        snippet_code = fetch_manim_construct_snippet_from_openai()
+        # snippet_code = fetch_manim_construct_snippet_from_openai()
 
-        # If the snippet is empty or malformed, use the fallback
+        # # If the snippet is empty or malformed, use the fallback
         # if not snippet_code.strip():
         #     snippet_code = _original_construct_snippet
+
+        # temporarily fall back to hardcoding the Manim logic
+        # after testing Websocket works in prod, will debug LLM call
+        snippet_code = _original_construct_snippet
 
 
         local_dict = {

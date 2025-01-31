@@ -1,7 +1,12 @@
 fastapi==0.109.2
-uvicorn==0.27.1
+uvicorn[standard]==0.27.1
 manim==0.18.0
 python-multipart==0.0.18
 mutagen==1.47.0
 openai==1.60.0
 python-dotenv==1.0.1
+websockets==14.2
+httptools==0.6.4
+watchfiles==1.0.4
+uvloop==0.21.0
+pyyaml==6.0.2
