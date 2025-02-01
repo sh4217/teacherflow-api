@@ -75,7 +75,7 @@ def generate_text(messages: List[ChatMessage], is_pro: bool = False) -> Dict[str
     
     except Exception as e:
         print(f"=== ERROR: Exception when calling OpenAI API: {e} ===")
-        raise Exception("Failed to generate response")
+        raise Exception(f"Failed to generate response: {str(e)}")
 
 def parse_scenes(text: str) -> List[str]:
     """Extract content from <scene> tags in the text."""
@@ -104,11 +104,15 @@ async def generate_speech(text: str, output_path: Path) -> bool:
                 input=text
             )
             
-            # Write the binary response directly to file
-            with open(output_path, 'wb') as f:
-                for chunk in response.iter_bytes():
-                    f.write(chunk)
-            return True
+            # Handle potential file I/O errors when writing the audio chunks
+            try:
+                with open(output_path, 'wb') as f:
+                    for chunk in response.iter_bytes():
+                        f.write(chunk)
+                return True
+            except IOError as e:
+                print(f"=== ERROR: Failed to write audio file: {e} ===")
+                return False
 
         except Exception as e:
             print(f"=== ERROR: Speech synthesis attempt {attempt + 1} failed: {e} ===")

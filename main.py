@@ -176,11 +176,6 @@ async def process_video_job(
             for audio_file in audio_files:
                 try:
                     audio_file.file.close()
-                except:
-                    pass
-            
-            for audio_file in audio_files:
-                try:
                     if hasattr(audio_file, 'filename') and isinstance(audio_file.filename, str):
                         audio_path = AUDIO_DIR / audio_file.filename
                         if audio_path.exists():
@@ -218,19 +213,25 @@ async def generate_video(
             audio_filename = f"{uuid4()}.mp3"
             audio_path = AUDIO_DIR / audio_filename
             
-            success = await generate_speech(scene, audio_path)
-            if success:
-                audio_files.append(audio_filename)
-            else:
-                for file in audio_files:
-                    try:
-                        (AUDIO_DIR / file).unlink()
-                    except:
-                        pass
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to generate audio for scene {i + 1}"
-                )
+            try:
+                success = await generate_speech(scene, audio_path)
+                if success:
+                    audio_files.append(audio_filename)
+                else:
+                    audio_path.unlink()
+                    for file in audio_files:
+                        try:
+                            (AUDIO_DIR / file).unlink()
+                        except:
+                            pass
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Failed to generate audio for scene {i + 1}"
+                    )
+            # delete audio_path if generate_speech fails
+            except:
+                audio_path.unlink()
+                raise
         
         saved_audio_files = []
         for audio_filename in audio_files:
