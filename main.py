@@ -11,7 +11,7 @@ from videos.video_utils import create_scene_segments, render_video
 from enum import Enum
 from pydantic import BaseModel
 import asyncio
-from ai.ai_utils import generate_text, parse_scenes, generate_speech
+from ai.ai_utils import generate_text, parse_scenes
 
 # Job status enum
 class JobStatus(str, Enum):

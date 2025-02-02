@@ -6,6 +6,13 @@ import tempfile
 import shutil
 # from ai_utils import fetch_manim_construct_snippet
 
+# need to import all of Manim due to variable code generation
+# include type hints for hard-coded Manim objects to avoid false positive warnings
+Scene: type
+MarkupText: type
+config: object
+ORIGIN: tuple
+
 _original_construct_snippet = '''"""Construct the scene with all segments."""
 frame_height = config.frame_height
 
