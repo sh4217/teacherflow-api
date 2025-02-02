@@ -165,4 +165,4 @@ async def generate_and_prepare_audio_files(scenes: List[str]) -> List[UploadFile
             )
         )
     
-    return saved_audio_files 
+    return saved_audio_files

@@ -13,4 +13,4 @@ SYSTEM_PROMPT = '''You are a technical expert creating a text-only script for an
 
 # OpenAI model constants
 O3_MINI = "o3-mini-2025-01-31"
-O1_MINI = "o1-mini-2024-09-12" 
+O1_MINI = "o1-mini-2024-09-12"
