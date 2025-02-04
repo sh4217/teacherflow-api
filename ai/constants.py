@@ -43,12 +43,15 @@ MANIM_SCENE_PROMPT = '''You are writing Python Manim code to generate an informa
         - "components": Each component has an "id", "name", and "description".  
         - "relationships": Each relationship has a "source", "target", "label", and "direction" (either "forward" for a one-way connection or "bidirectional" for a two-way connection).
 
-        Your task is to create a single Manim Scene that visually represents the entire system design. For each component, draw a box that displays the component's name (do not include the description at this stage). Then, connect the boxes with arrows according to the relationships defined in the JSON:
+        Your task is to create two Manim Scenes that will form the video. The first is a simple introduction scene: display the topic.
+        
+        The second scene is a visual representation of the entire system design. For each component, draw a box that displays the component's name (do not include the description at this stage). Then, connect the boxes with arrows according to the relationships defined in the JSON:
         - Include the relationship label near the arrow.
         - Make sure that all the elements are clearly visible and none of them overlap.
-        - You need to include an audio voiceover file to the scene. It is located at this file path: {audio_file_path}. The audio is duration in seconds is {audio_duration}, so make sure the video is at least that long.
+        - You need to include an audio voiceover file to the scene. It is located at this file path: {audio_file_path}. The audio duration in seconds is {audio_duration}, so make sure the video is at least that long.
         
         Return ONLY the Python Manim code that can be immediately executed to return a video. 
+        You do not need to include any code related to rendering the video; this will be handled by another service.
         Do not output any other text besides this code.
         Do not wrap the code output in ```python or ```.'''
 

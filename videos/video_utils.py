@@ -133,22 +133,14 @@ async def generate_and_render_video(
             
             await update_progress(80)
             
-            # Extract the Scene class name
-            class_match = re.search(r'class\s+(\w+)\s*\(\s*Scene\s*\)', manim_code)
-            if not class_match:
-                raise HTTPException(status_code=500, detail="Could not find Scene class in generated code")
-            scene_class_name = class_match.group(1)
-            print(f"=== DEBUG: Found scene class name: {scene_class_name} ===")
-            
             # Run the Manim code
             return await run_manim_code(
-                manim_code,
-                scene_class_name,
-                video_filename,
-                output_path,
-                generation_dir,
-                update_progress,
-                attempt
+                manim_code=manim_code,
+                video_filename=video_filename,
+                output_path=output_path,
+                generation_dir=generation_dir,
+                update_progress=update_progress,
+                attempt=attempt
             )
                 
         except subprocess.CalledProcessError as e:
@@ -176,7 +168,6 @@ async def generate_and_render_video(
 
 async def run_manim_code(
     manim_code: str,
-    scene_class_name: str,
     video_filename: str,
     output_path: Path,
     generation_dir: Optional[Path],
@@ -199,24 +190,25 @@ async def run_manim_code(
         
         await update_progress(90)
         
-        # Run Manim command
-        cmd = ["manim", "-qm", str(temp_file_path), scene_class_name, "-o", video_filename]
+        # Run Manim command with -a flag to render all scenes
+        cmd = ["manim", "-qm", "-a", str(temp_file_path)]
         print(f"=== DEBUG: Running Manim command: {' '.join(cmd)} ===")
         subprocess.run(cmd, cwd=temp_dir, capture_output=True, text=True, check=True)
         print("=== DEBUG: Manim command completed successfully ===")
         
-        await update_progress(100)
-        
-        # Locate the rendered video
-        video_pattern = f"media/videos/**/720p30/{video_filename}"
-        print(f"=== DEBUG: Searching for video with pattern: {video_pattern} ===")
-        rendered_videos = list(Path(temp_dir).glob(video_pattern))
-        print(f"=== DEBUG: Found {len(rendered_videos)} matching videos ===")
+        # Locate all rendered videos
+        video_pattern = "media/videos/**/720p30/*.mp4"
+        print(f"=== DEBUG: Searching for videos with pattern: {video_pattern} ===")
+        rendered_videos = sorted(list(Path(temp_dir).glob(video_pattern)))
+        print(f"=== DEBUG: Found {len(rendered_videos)} scene videos ===")
         
         if not rendered_videos:
-            raise Exception(f"Could not find rendered video with pattern: {video_pattern}")
+            raise Exception(f"Could not find any rendered videos with pattern: {video_pattern}")
+            
+        # Process videos to get a single output video
+        rendered_video = concatenate_scenes(rendered_videos, temp_dir_path, video_filename)
         
-        rendered_video = rendered_videos[0]
+        await update_progress(100)
         
         # In debug mode, save to both locations
         if DEBUG_MODE:
@@ -240,3 +232,46 @@ async def run_manim_code(
             shutil.move(str(rendered_video), str(output_path))
         
         return video_filename
+
+def concatenate_scenes(
+    rendered_videos: list[Path],
+    temp_dir_path: Path,
+    video_filename: str
+) -> Path:
+    """
+    Process rendered videos and return a single video file.
+    If multiple videos exist, they will be concatenated using ffmpeg.
+    If only one video exists, it will be renamed to the desired filename.
+    
+    Args:
+        rendered_videos: List of rendered video file paths
+        temp_dir_path: Path to temporary directory
+        video_filename: Desired filename for the output video
+        
+    Returns:
+        Path to the final video file
+    """
+    if len(rendered_videos) > 1:
+        print("=== DEBUG: Multiple scenes found, concatenating videos ===")
+        # Create a file listing all videos to concatenate
+        concat_file = temp_dir_path / "concat.txt"
+        with open(concat_file, "w") as f:
+            for video in rendered_videos:
+                f.write(f"file '{video.absolute()}'\n")
+        
+        # Use ffmpeg to concatenate the videos
+        combined_video = temp_dir_path / video_filename
+        concat_cmd = [
+            "ffmpeg", "-f", "concat", "-safe", "0",
+            "-i", str(concat_file),
+            "-c", "copy",
+            str(combined_video)
+        ]
+        print(f"=== DEBUG: Running ffmpeg concat command: {' '.join(concat_cmd)} ===")
+        subprocess.run(concat_cmd, capture_output=True, text=True, check=True)
+        return combined_video
+    else:
+        # Single video case - just rename to desired filename
+        rendered_video = temp_dir_path / video_filename
+        shutil.move(str(rendered_videos[0]), str(rendered_video))
+        return rendered_video
