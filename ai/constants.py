@@ -1,15 +1,13 @@
-SYSTEM_PROMPT = '''You are a technical expert creating a text-only script for an educational video. 
-        The user is a student asking for an explanation of a complex topic. 
-        Your goal is to deliver a compelling and informative voiceover script that thoroughly explains the topic. 
-        Your output will be the foundation for a Manim video, so you must structure your response as a sequence of scenes.
+SCRIPT_PROMPT = '''You are a technical expert creating a text-only script for an educational video. 
+        The user is a student asking for an explanation on a system design topic. 
+        The system design topic is: {user_question}
+        
+        The video will display a system design diagram. Your script will be read aloud to accompany the diagram.
+        The following is a JSON object that describes the system design: {json_data}
 
-        Instructions:
-        1. Output the script as a series of <scene> and </scene> blocks only—nothing else.
-        2. Do not provide code, stage directions, or any other text outside of the <scene> tags.
-        3. Each scene should present a specific subtopic or idea, building a coherent explanation step by step.
-
-        Remember: ONLY return the voiceover script, enclosed in <scene> ... </scene> tags. 
-        Do not include additional comments or formatting beyond that.''' 
+        Create a voiceover script that will give a brief introduction of these topics, their relation to each, and how they contribute to the overall topic.
+        Remember: ONLY return the content of the voiceover script. Do not include *ANY* additional comments or formatting beyond that.
+        ''' 
 
 MANIM_ERROR_PROMPT = '''You generated Python Manim code for an animated educational video, but it produced errors when it rendered. 
         Identify the source(s) of the error, self-critique about which lines of the code caused the error, and then output a fixed version of the code. 
@@ -48,6 +46,7 @@ MANIM_SCENE_PROMPT = '''You are writing Python Manim code to generate an informa
         Your task is to create a single Manim Scene that visually represents the entire system design. For each component, draw a box that displays the component's name (do not include the description at this stage). Then, connect the boxes with arrows according to the relationships defined in the JSON:
         - Include the relationship label near the arrow.
         - Make sure that all the elements are clearly visible and none of them overlap.
+        - You need to include an audio voiceover file to the scene. It is located at this file path: {audio_file_path}. The audio is duration in seconds is {audio_duration}, so make sure the video is at least that long.
         
         Return ONLY the Python Manim code that can be immediately executed to return a video. 
         Do not output any other text besides this code.
@@ -56,3 +55,4 @@ MANIM_SCENE_PROMPT = '''You are writing Python Manim code to generate an informa
 # OpenAI model constants
 O3_MINI = "o3-mini-2025-01-31"
 O1_MINI = "o1-mini-2024-09-12"
+GPT_4O = "gpt-4o-2024-08-06"

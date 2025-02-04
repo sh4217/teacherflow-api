@@ -2,10 +2,9 @@ from openai import OpenAI
 import os
 from dotenv import load_dotenv
 from typing import List, Dict, Literal, Optional, TypedDict
-import re
 import time
 from pathlib import Path
-from .constants import SYSTEM_PROMPT, O3_MINI, O1_MINI, MANIM_ERROR_PROMPT, SYSTEM_DESIGN_PROMPT, MANIM_SCENE_PROMPT
+from .constants import *
 
 from typing import List, Literal
 from pydantic import BaseModel
@@ -45,7 +44,7 @@ class Relationship(BaseModel):
 class SystemDesign(BaseModel):
     components: List[Component]
     relationships: List[Relationship]
-
+    
 def generate_text(messages: List[ChatMessage], is_pro: bool = False) -> Dict[str, ChatMessage]:
     """
     Generate text response using OpenAI's chat completion API.
@@ -62,9 +61,9 @@ def generate_text(messages: List[ChatMessage], is_pro: bool = False) -> Dict[str
 
     # Construct API messages based on user type
     if is_pro:
-        api_messages = [{"role": "developer", "content": SYSTEM_PROMPT}, *messages]
+        api_messages = [{"role": "developer", "content": SCRIPT_PROMPT}, *messages]
     else:
-        api_messages = [{"role": "user", "content": SYSTEM_PROMPT}, *messages]
+        api_messages = [{"role": "user", "content": SCRIPT_PROMPT}, *messages]
 
     try:
         response = client.chat.completions.create(
@@ -79,14 +78,6 @@ def generate_text(messages: List[ChatMessage], is_pro: bool = False) -> Dict[str
     except Exception as e:
         print(f"=== ERROR: Exception when calling OpenAI API: {e} ===")
         raise Exception(f"Failed to generate response: {str(e)}")
-
-def parse_scenes(text: str) -> List[str]:
-    """Extract content from <scene> tags in the text."""
-    pattern = r'<scene>([\s\S]*?)</scene>'
-    scenes = [match.group(1).strip() for match in re.finditer(pattern, text)]
-    if not scenes:
-        raise ValueError('No scenes found in text')
-    return scenes
 
 async def generate_speech(text: str, output_path: Path) -> bool:
     """
@@ -125,82 +116,7 @@ async def generate_speech(text: str, output_path: Path) -> bool:
 
     return False
 
-def fetch_manim_construct_snippet() -> str:
-    """
-    Calls OpenAI API to fetch exactly the code snippet for the `construct()` body.
-    Returns a stripped Python code snippet or an empty string on error/invalid response.
-    """
-    if client is None:
-        print("=== WARNING: OpenAI client not initialized. Returning empty snippet. ===")
-        return ""
-
-    # The prompt: strictly instruct the model to return only the snippet
-    prompt_text = """
-        Return ONLY the Manim construct body code as a plain code block (no explanations).
-        That code block is:
-
-        <Code segment>
-                \"\"\"Construct the scene with all segments.\"\"\"
-                frame_height = config.frame_height
-                for i, segment in enumerate(self.segments):
-                    self.remove(*self.mobjects)
-                    text = self.create_text(segment.text, self.INITIAL_FONT_SIZE)
-                    while text.height > frame_height * 0.85 and text.font_size > self.MIN_FONT_SIZE:
-                        new_size = max(self.MIN_FONT_SIZE, text.font_size * 0.95)
-                        text = self.create_text(segment.text, new_size)
-                    text.move_to(ORIGIN)
-                    self.add(text)
-                    
-                    if segment.has_audio:
-                        try:
-                            self.add_sound(segment.audio_path)
-                            self.wait(segment.duration)
-                        except Exception as e:
-                            print(f"Audio playback failed for scene {i}: {e}")
-                            self.wait(5)
-                    else:
-                        self.wait(5)
-                    
-                    if i < len(self.segments) - 1:
-                        self.wait(0.25)
-        </Code segment>
-
-        Do not wrap your answer in any markdown or text, including code fences 
-        such as such as ```python or ```, other than the code.
-        The user will handle code formatting and execution.
-        """
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-2024-11-20",
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt_text
-                }
-            ],
-            temperature=0.0
-        )
-
-        # Extract the full text from the response
-        content = response.choices[0].message.content
-        print(f"=== DEBUG: Raw OpenAI response ===\n{content}\n=== END DEBUG ===")
-
-        # Attempt to locate code fences (``` ... ```) and extract the snippet inside
-        snippet_code = content.strip()
-        start_code = snippet_code.find("```")
-        end_code = snippet_code.rfind("```")
-        if start_code != -1 and end_code != -1 and start_code != end_code:
-            # Extract between the first and last triple backticks
-            snippet_code = snippet_code[start_code + 3 : end_code].strip()
-
-        return snippet_code
-
-    except Exception as e:
-        print(f"=== ERROR: Exception when calling OpenAI API: {e} ===")
-        return ""
-
-def generate_system_design(user_question: str, json_data: str, previous_code: str = None, error_message: str = None) -> str:
+def generate_system_design(user_question: str, json_data: str, previous_code: str = None, error_message: str = None, audio_file_path: str = None, audio_duration: float = None) -> str:
     """
     Calls OpenAI API to generate Manim code for system design visualization, using both the question and JSON data.
     
@@ -231,7 +147,9 @@ def generate_system_design(user_question: str, json_data: str, previous_code: st
         # Include both the question and JSON data in the prompt
         prompt_text = MANIM_SCENE_PROMPT.format(
             user_question=user_question,
-            json_data=json_data
+            json_data=json_data,
+            audio_file_path=audio_file_path,
+            audio_duration=audio_duration
         )
     
     print(f"=== DEBUG: Using prompt:\n{prompt_text}\n=== END PROMPT ===")
@@ -290,7 +208,7 @@ def generate_concepts(messages: List[ChatMessage], is_pro: bool = False) -> Dict
         # Call the beta API method that supports structured output.
         # The response_format parameter is set to the SystemDesign class, which defines the expected output.
         completion = client.beta.chat.completions.parse(
-            model="gpt-4o-2024-08-06",
+            model=GPT_4O,
             messages=api_messages,
             response_format=SystemDesign,
             temperature=0

@@ -1,4 +1,4 @@
-from audio.audio_utils import process_audio_files, generate_and_prepare_audio_files
+from audio.audio_utils import generate_and_prepare_audio_files, get_audio_duration
 from fastapi import FastAPI, HTTPException, UploadFile, BackgroundTasks, Body
 from fastapi.middleware.cors import CORSMiddleware
 from uuid import uuid4
@@ -7,11 +7,10 @@ from pathlib import Path
 from manim import *
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
-from videos.video_utils import create_scene_segments, render_video
 from enum import Enum
 from pydantic import BaseModel
 import asyncio
-from ai.ai_utils import generate_text, parse_scenes, generate_concepts, generate_system_design
+from ai.ai_utils import generate_concepts, generate_system_design, generate_text
 import os
 from dotenv import load_dotenv
 import subprocess
@@ -81,6 +80,17 @@ AUDIO_DIR.mkdir(exist_ok=True)
 app.mount("/videos", StaticFiles(directory="videos"), name="videos")
 app.mount("/json", StaticFiles(directory="json"), name="json")
 
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}
+
+@app.get("/job-status/{job_id}")
+async def get_job_status(job_id: str):
+    """Endpoint to get job status"""
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return jobs[job_id]
+
 async def validate_request(texts: List[str], audio_files: List[UploadFile]):
     """Validate the incoming request data"""
     if len(texts) != len(audio_files):
@@ -96,68 +106,14 @@ def cleanup_temp_files(temp_files: List[str]):
 
 async def process_video_job(
     job_id: str,
-    texts: List[str],
-    audio_files: List[UploadFile]
-):
-    """Background task to process the video generation job"""
-    temp_files = []
-    audio_paths = []  # Track audio paths for cleanup
-    
-    async def update_progress(progress: int, status: JobStatus = JobStatus.IN_PROGRESS):
-        """Helper function to update job progress with sufficient sleep time"""
-        jobs[job_id].status = status
-        jobs[job_id].progress = progress
-        await asyncio.sleep(0.5)
-    
-    try:
-        await update_progress(50)
-        
-        await validate_request(texts, audio_files)
-        
-        VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
-        
-        video_filename = f"{uuid4()}.mp4"
-        video_path = VIDEOS_DIR / video_filename
-        
-        audio_paths, new_temp_files = await process_audio_files(audio_files)
-        temp_files.extend(new_temp_files)
-        
-        try:
-            segments = create_scene_segments(texts, audio_paths)
-            await update_progress(80)
-            
-            await render_video(segments, video_path)
-            await update_progress(90)
-            
-            jobs[job_id].status = JobStatus.COMPLETED
-            jobs[job_id].progress = 100
-            jobs[job_id].videoUrl = video_filename
-            
-        finally:
-            cleanup_temp_files(temp_files)
-            for audio_file in audio_files:
-                try:
-                    audio_file.file.close()
-                    if hasattr(audio_file, 'filename') and isinstance(audio_file.filename, str):
-                        audio_path = AUDIO_DIR / audio_file.filename
-                        if audio_path.exists():
-                            audio_path.unlink()
-                except Exception as e:
-                    print(f"=== ERROR: Failed to clean up audio file: {e} ===")
-            
-    except Exception as e:
-        print(f"=== ERROR: Exception in video processing job {job_id}: {e} ===")
-        jobs[job_id].status = JobStatus.FAILED
-        jobs[job_id].progress = 0
-        raise
-
-async def process_system_design_video_job(
-    job_id: str,
     user_query: str,
     json_content: str,
-    is_pro: bool
+    is_pro: bool,
+    audio_file_path: str = None,
+    audio_duration: float = None
 ):
     """Background task to process the system design video generation job"""
+    temp_files = []
     
     async def update_progress(progress: int, status: JobStatus = JobStatus.IN_PROGRESS):
         """Helper function to update job progress with sufficient sleep time"""
@@ -195,7 +151,14 @@ async def process_system_design_video_job(
             try:
                 print(f"=== DEBUG: Attempt {attempt + 1}/{max_retries + 1} to generate and render video ===")
                 # Generate the system design Manim code
-                manim_code = generate_system_design(user_query, json_content, previous_code=last_code, error_message=last_error)
+                manim_code = generate_system_design(
+                    user_query, 
+                    json_content, 
+                    previous_code=last_code, 
+                    error_message=last_error,
+                    audio_file_path=audio_file_path,
+                    audio_duration=audio_duration
+                )
                 if not manim_code:
                     raise HTTPException(status_code=500, detail="Failed to generate system design Manim code")
                 
@@ -259,6 +222,17 @@ async def process_system_design_video_job(
                     jobs[job_id].status = JobStatus.COMPLETED
                     jobs[job_id].progress = 100
                     jobs[job_id].videoUrl = video_filename
+                    
+                    # Clean up audio file after successful video generation
+                    if audio_file_path:
+                        try:
+                            audio_path = Path(audio_file_path)
+                            if audio_path.exists():
+                                audio_path.unlink()
+                                print(f"=== DEBUG: Cleaned up audio file: {audio_path} ===")
+                        except Exception as cleanup_error:
+                            print(f"=== ERROR: Failed to clean up audio file: {cleanup_error} ===")
+                    
                     return
                     
             except subprocess.CalledProcessError as e:
@@ -277,6 +251,15 @@ async def process_system_design_video_job(
                 if attempt == max_retries:
                     jobs[job_id].status = JobStatus.FAILED
                     jobs[job_id].progress = 0
+                    # Clean up audio file on final failure
+                    if audio_file_path:
+                        try:
+                            audio_path = Path(audio_file_path)
+                            if audio_path.exists():
+                                audio_path.unlink()
+                                print(f"=== DEBUG: Cleaned up audio file after failure: {audio_path} ===")
+                        except Exception as cleanup_error:
+                            print(f"=== ERROR: Failed to clean up audio file: {cleanup_error} ===")
                     raise HTTPException(status_code=500, detail=f"Failed to render video after {max_retries + 1} attempts: {e.stderr}")
                 
                 last_error = e.stderr
@@ -300,6 +283,15 @@ async def process_system_design_video_job(
                 if attempt == max_retries:
                     jobs[job_id].status = JobStatus.FAILED
                     jobs[job_id].progress = 0
+                    # Clean up audio file on final failure
+                    if audio_file_path:
+                        try:
+                            audio_path = Path(audio_file_path)
+                            if audio_path.exists():
+                                audio_path.unlink()
+                                print(f"=== DEBUG: Cleaned up audio file after failure: {audio_path} ===")
+                        except Exception as cleanup_error:
+                            print(f"=== ERROR: Failed to clean up audio file: {cleanup_error} ===")
                     raise HTTPException(status_code=500, detail=f"Failed to process video after {max_retries + 1} attempts: {str(e)}")
                 
                 last_error = str(e)
@@ -311,58 +303,24 @@ async def process_system_design_video_job(
         print(f"=== ERROR: Exception in system design video job {job_id}: {str(e)} ===")
         jobs[job_id].status = JobStatus.FAILED
         jobs[job_id].progress = 0
+        # Clean up audio file on any unexpected error
+        if audio_file_path:
+            try:
+                audio_path = Path(audio_file_path)
+                if audio_path.exists():
+                    audio_path.unlink()
+                    print(f"=== DEBUG: Cleaned up audio file after error: {audio_path} ===")
+            except Exception as cleanup_error:
+                print(f"=== ERROR: Failed to clean up audio file: {cleanup_error} ===")
         raise
-
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy"}
-
-@app.get("/job-status/{job_id}")
-async def get_job_status(job_id: str):
-    """Endpoint to get job status"""
-    if job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-    return jobs[job_id]
 
 @app.post("/generate-video")
 async def generate_video(
     background_tasks: BackgroundTasks,
-    request: TextRequest
-):
-    """Start a video generation job using AI-generated text and audio"""
-    job_id = str(uuid4())
-    jobs[job_id] = JobMetadata(
-        job_id=job_id,
-        status=JobStatus.PENDING,
-        progress=0
-    )
-    
-    try:
-        messages = [{"role": "user", "content": request.query}]
-        text_response = generate_text(messages, is_pro=request.is_pro)
-        scenes = parse_scenes(text_response["message"]["content"])
-        
-        saved_audio_files = await generate_and_prepare_audio_files(scenes)
-    
-        background_tasks.add_task(
-            process_video_job,
-            job_id=job_id,
-            texts=scenes,
-            audio_files=saved_audio_files
-        )
-        
-        return {"job_id": job_id}
-        
-    except Exception as e:
-        print(f"=== ERROR: Exception in generate_video: {str(e)} ===")
-        raise
-
-@app.post("/generate-system-design-video")
-async def generate_system_design_video(
-    background_tasks: BackgroundTasks,
     request: ConceptRequest
 ):
     """Start a system design video generation job"""
+    audio_files = []  # Track audio files for cleanup
     try:
         # Create a new job
         job_id = str(uuid4())
@@ -380,6 +338,26 @@ async def generate_system_design_video(
         concept_response = generate_concepts(messages, is_pro=request.is_pro)
         json_content = concept_response["message"]["content"]
         
+        # Step 2: Generate voiceover script
+        print("=== DEBUG: Step 2 - Generating voiceover script ===")
+        script_response = generate_text(messages, is_pro=request.is_pro)
+        script_content = script_response["message"]["content"]
+        
+        # Step 3: Generate audio from script
+        print("=== DEBUG: Step 3 - Generating audio from script ===")
+        scenes = [script_content]  # Wrap in list since the method expects multiple scenes
+        audio_files = await generate_and_prepare_audio_files(scenes)
+        
+        if not audio_files:
+            raise Exception("Failed to generate audio files")
+            
+        # Get the audio file path and duration
+        audio_file = audio_files[0]  # We only have one audio file
+        audio_file_path = str(Path.cwd() / AUDIO_DIR / audio_file.filename)  # Use absolute path
+        audio_duration = get_audio_duration(audio_file_path)
+        
+        print(f"=== DEBUG: Generated audio file: {audio_file_path} with duration {audio_duration}s ===")
+        
         # Save JSON to file only in debug mode
         if DEBUG_MODE:
             json_filename = f"{uuid4()}.json"
@@ -391,17 +369,30 @@ async def generate_system_design_video(
         
         # Start the background task
         background_tasks.add_task(
-            process_system_design_video_job,
+            process_video_job,
             job_id=job_id,
             user_query=request.query,
             json_content=json_content,
-            is_pro=request.is_pro
+            is_pro=request.is_pro,
+            audio_file_path=audio_file_path,
+            audio_duration=audio_duration
         )
         
         return {"job_id": job_id}
         
     except Exception as e:
         print(f"=== ERROR: Exception in generate_system_design_video: {str(e)} ===")
+        # Clean up audio files if there's an error
+        for audio_file in audio_files:
+            try:
+                if hasattr(audio_file, 'file'):
+                    audio_file.file.close()
+                audio_path = AUDIO_DIR / audio_file.filename
+                if audio_path.exists():
+                    audio_path.unlink()
+                    print(f"=== DEBUG: Cleaned up audio file: {audio_path} ===")
+            except Exception as cleanup_error:
+                print(f"=== ERROR: Failed to clean up audio file: {cleanup_error} ===")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.api_route("/delete/videos", methods=["POST", "DELETE"])
