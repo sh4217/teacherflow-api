@@ -11,7 +11,15 @@ from videos.video_utils import create_scene_segments, render_video
 from enum import Enum
 from pydantic import BaseModel
 import asyncio
-from ai.ai_utils import generate_text, parse_scenes
+from ai.ai_utils import generate_text, parse_scenes, generate_manim, generate_concepts
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Debug mode setting
+DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
 
 # Job status enum
 class JobStatus(str, Enum):
@@ -32,8 +40,19 @@ class TextRequest(BaseModel):
     query: str
     is_pro: Optional[bool] = False
 
+class ConceptRequest(BaseModel):
+    query: str
+    is_pro: Optional[bool] = False
+
+class ManimRequest(BaseModel):
+    query: str
+
 # In-memory job store
 jobs: Dict[str, JobMetadata] = {}
+
+# Add this near other directory constants
+JSON_DIR = Path("json")
+JSON_DIR.mkdir(exist_ok=True)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -56,6 +75,7 @@ AUDIO_DIR = Path("audio")
 AUDIO_DIR.mkdir(exist_ok=True)
 
 app.mount("/videos", StaticFiles(directory="videos"), name="videos")
+app.mount("/json", StaticFiles(directory="json"), name="json")
 
 async def validate_request(texts: List[str], audio_files: List[UploadFile]):
     """Validate the incoming request data"""
@@ -171,25 +191,204 @@ async def generate_video(
         print(f"=== ERROR: Exception in generate_video: {str(e)} ===")
         raise
 
-@app.api_route("/delete/videos", methods=["POST", "DELETE"])
-async def delete_videos(filenames: List[str] = Body(...)):
-    results = []
-    for filename in filenames:
-        if "/" in filename or "\\" in filename:
-            results.append({"filename": filename, "status": "error", "message": "Invalid filename"})
-            continue
+@app.post("/generate-manim")
+async def generate_manim_video(request: ManimRequest):
+    """Generate and render Manim video for a given query"""
+    try:
+        import tempfile
+        import subprocess
+        import shutil
+        import os
+        import re
+
+        print("=== DEBUG: Starting Manim video generation process ===")
+
+        # Generate a unique ID for this video
+        video_id = str(uuid4())
+        video_filename = f"{video_id}.mp4"
+        
+        # Set up paths based on debug mode
+        if DEBUG_MODE:
+            # Create code directory and generation directory for debugging
+            code_dir = Path("code")
+            code_dir.mkdir(exist_ok=True)
+            generation_dir = code_dir / video_id
+            generation_dir.mkdir(exist_ok=True)
+            output_path = generation_dir / video_filename
+        else:
+            # In production, save directly to videos directory
+            output_path = VIDEOS_DIR / video_filename
             
-        video_path = VIDEOS_DIR / filename
-        try:
-            if not video_path.exists():
-                results.append({"filename": filename, "status": "error", "message": "File not found"})
-                continue
+        print(f"=== DEBUG: Target output path: {output_path} ===")
+
+        max_retries = 2
+        attempt = 0
+        last_error = None
+        last_code = None
+
+        while attempt <= max_retries:
+            try:
+                # Generate the Manim code
+                manim_code = generate_manim(
+                    request.query,
+                    previous_code=last_code,
+                    error_message=last_error
+                )
+                if not manim_code:
+                    raise HTTPException(status_code=500, detail="Failed to generate Manim code")
+
+                # Extract the scene class name from the code
+                class_match = re.search(r'class\s+(\w+)\s*\(\s*Scene\s*\)', manim_code)
+                if not class_match:
+                    raise HTTPException(status_code=500, detail="Could not find Scene class in generated code")
+                scene_class_name = class_match.group(1)
+                print(f"=== DEBUG: Extracted scene class name: {scene_class_name} ===")
+
+                # Create a temporary directory for our work
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    print(f"=== DEBUG: Created temporary directory: {temp_dir} ===")
+                    
+                    # Create a Python file with the generated code
+                    temp_file_path = Path(temp_dir) / "scene.py"
+                    with open(temp_file_path, "w") as f:
+                        f.write(manim_code)
+                    print(f"=== DEBUG: Written scene code to: {temp_file_path} ===")
+
+                    # Run manim command to render the video
+                    cmd = [
+                        "manim",
+                        "-qm",  # medium quality
+                        str(temp_file_path),
+                        scene_class_name,  # use the extracted class name
+                        "-o",
+                        video_filename,
+                    ]
+                    print(f"=== DEBUG: Running command: {' '.join(cmd)} ===")
+                    print(f"=== DEBUG: Working directory: {temp_dir} ===")
+
+                    result = subprocess.run(
+                        cmd,
+                        cwd=temp_dir,
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    )
+                    print("=== DEBUG: Manim command completed successfully ===")
+
+                    # List all files in media directory for debugging
+                    media_dir = Path(temp_dir) / "media" / "videos"
+                    print(f"=== DEBUG: Contents of media directory {media_dir}: ===")
+                    for path in media_dir.rglob("*"):
+                        print(f"  {path.relative_to(media_dir)}")
+
+                    # Find and move the rendered video to our videos directory
+                    video_pattern = f"media/videos/**/720p30/{video_filename}"
+                    print(f"=== DEBUG: Searching for video with pattern: {video_pattern} ===")
+                    rendered_videos = list(Path(temp_dir).glob(video_pattern))
+                    print(f"=== DEBUG: Found {len(rendered_videos)} matching videos: {rendered_videos} ===")
+                    
+                    if not rendered_videos:
+                        raise Exception(f"Could not find rendered video with pattern: {video_pattern}")
+                    
+                    rendered_video = rendered_videos[0]
+                    print(f"=== DEBUG: Moving video from {rendered_video} to {output_path} ===")
+                    shutil.move(str(rendered_video), str(output_path))
+
+                    if DEBUG_MODE:
+                        # Save the successful code only in debug mode
+                        success_file = generation_dir / f"success-{attempt + 1}.py"
+                        with open(success_file, "w") as f:
+                            f.write(manim_code)
+                        print(f"=== DEBUG: Saved successful code to: {success_file} ===")
+                        
+                        # Copy the video to the videos directory (don't use symlink)
+                        video_copy = VIDEOS_DIR / video_filename
+                        shutil.copy2(output_path, video_copy)
+                        print(f"=== DEBUG: Copied video to: {video_copy} ===")
+                    else:
+                        # In production, copy to videos directory directly
+                        shutil.copy2(output_path, VIDEOS_DIR / video_filename)
+
+                    return {
+                        "videoUrl": video_filename,
+                        "message": "Video generated successfully",
+                        "attempts": attempt + 1
+                    }
+
+            except subprocess.CalledProcessError as e:
+                print(f"=== ERROR: Manim rendering failed on attempt {attempt + 1} ===")
+                print(f"=== Command output (stdout) ===\n{e.stdout}")
+                print(f"=== Command output (stderr) ===\n{e.stderr}")
                 
-            video_path.unlink()
-            results.append({"filename": filename, "status": "success", "message": "Deleted"})
-            
-        except Exception as e:
-            print(f"=== ERROR: Failed to delete video {filename}: {e} ===")
-            results.append({"filename": filename, "status": "error", "message": str(e)})
-    
-    return {"results": results}
+                if DEBUG_MODE:
+                    # Save the failed code only in debug mode
+                    fail_file = generation_dir / f"fail-{attempt + 1}.py"
+                    with open(fail_file, "w") as f:
+                        f.write(manim_code)
+                        f.write("\n\n# Error details from Manim rendering:\n")
+                        f.write(f'error_message = """{e.stderr}"""')
+                    print(f"=== DEBUG: Saved failed code to: {fail_file} ===")
+                
+                if attempt == max_retries:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Failed to render video after {max_retries + 1} attempts: {e.stderr}"
+                    )
+                    
+                last_error = e.stderr
+                last_code = manim_code
+                attempt += 1
+                continue
+
+            except Exception as e:
+                print(f"=== ERROR: Failed to process video on attempt {attempt + 1}: {str(e)} ===")
+                print(f"=== Error type: {type(e)} ===")
+                print(f"=== Error details: {str(e)} ===")
+                
+                if DEBUG_MODE:
+                    # Save the failed code only in debug mode
+                    fail_file = generation_dir / f"fail-{attempt + 1}.py"
+                    with open(fail_file, "w") as f:
+                        f.write(manim_code)
+                        f.write("\n\n# Error details from execution:\n")
+                        f.write(f'error_message = """{str(e)}"""')
+                    print(f"=== DEBUG: Saved failed code to: {fail_file} ===")
+                
+                if attempt == max_retries:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Failed to process video after {max_retries + 1} attempts: {str(e)}"
+                    )
+                    
+                last_error = str(e)
+                last_code = manim_code
+                attempt += 1
+                continue
+
+    except Exception as e:
+        print(f"=== ERROR: Exception in generate_manim_video: {str(e)} ===")
+        print(f"=== Error type: {type(e)} ===")
+        print(f"=== Error details: {str(e)} ===")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/create-conceptual-graph")
+async def create_conceptual_graph(request: ConceptRequest):
+    """Generate a conceptual graph for a given technical topic and save to JSON file"""
+    try:
+        messages = [{"role": "user", "content": request.query}]
+        response = generate_concepts(messages, is_pro=request.is_pro)
+        
+        # Generate unique filename and save JSON
+        json_filename = f"{uuid4()}.json"
+        json_path = JSON_DIR / json_filename
+        
+        with open(json_path, 'w') as f:
+            f.write(response["message"]["content"])
+        
+        return {
+            "message": response["message"],
+            "jsonPath": json_filename
+        }
+    except Exception as e:
+        print(f"=== ERROR: Exception in create_conceptual_graph: {str(e)} ===")
+        raise HTTPException(status_code=500, detail=str(e))

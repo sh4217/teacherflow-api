@@ -5,7 +5,11 @@ from typing import List, Dict, Literal, Optional, TypedDict
 import re
 import time
 from pathlib import Path
-from .constants import SYSTEM_PROMPT, O3_MINI, O1_MINI
+from .constants import SYSTEM_PROMPT, O3_MINI, O1_MINI, MANIM_INITIAL_PROMPT, MANIM_ERROR_PROMPT, SYSTEM_DESIGN_PROMPT
+
+from typing import List, Literal
+from pydantic import BaseModel
+
 
 # Load environment variables from .env file
 load_dotenv()
@@ -180,3 +184,136 @@ def fetch_manim_construct_snippet() -> str:
     except Exception as e:
         print(f"=== ERROR: Exception when calling OpenAI API: {e} ===")
         return ""
+
+def generate_manim(user_question: str, previous_code: str = None, error_message: str = None) -> str:
+    """
+    Calls OpenAI API to generate Manim code, optionally incorporating error feedback.
+    
+    Args:
+        user_question (str): The topic/question to generate a video about
+        previous_code (str, optional): The previous code that failed
+        error_message (str, optional): The error message from the failed attempt
+        
+    Returns:
+        str: The Manim Python code as a string
+    """
+    if client is None:
+        print("=== WARNING: OpenAI client not initialized. Returning empty snippet. ===")
+        return ""
+
+    # Construct the appropriate prompt based on whether this is a retry
+    if previous_code and error_message:
+        prompt_text = MANIM_ERROR_PROMPT.format(
+            previous_code=previous_code,
+            error_message=error_message
+        )
+    else:
+        prompt_text = MANIM_INITIAL_PROMPT.format(
+            user_question=user_question
+        )
+
+    try:
+        response = client.chat.completions.create(
+            model=O3_MINI,
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt_text
+                }
+            ]
+        )
+
+        content = response.choices[0].message.content
+        print(f"=== DEBUG: Raw OpenAI response ===\n{content}\n=== END DEBUG ===")
+        return content
+
+    except Exception as e:
+        print(f"=== ERROR: Exception when calling OpenAI API: {e} ===")
+        return ""
+
+# def generate_concepts(messages: List[ChatMessage], is_pro: bool = False) -> Dict[str, ChatMessage]:
+#     """
+#     Generate conceptual graph response using OpenAI's chat completion API.
+#     This is currently an exact copy of generate_text, to be modified later for concept graph generation.
+    
+#     Args:
+#         messages (List[ChatMessage]): List of chat messages
+#         is_pro (bool): Whether the user has a pro subscription
+        
+#     Returns:
+#         Dict containing the assistant's response message
+#     """
+#     if client is None:
+#         raise Exception("OpenAI client not initialized")
+
+#     # Construct API messages based on user type
+#     api_messages = [{"role": "developer", "content": SYSTEM_DESIGN_PROMPT}, *messages]
+
+#     try:
+#         response = client.chat.completions.create(
+#             model="gpt-4o-2024-08-06",
+#             messages=api_messages,
+#             temperature=0
+#         )
+
+#         completion = response.choices[0].message.content
+#         return {"message": {"role": "assistant", "content": completion}}
+    
+#     except Exception as e:
+#         print(f"=== ERROR: Exception when calling OpenAI API: {e} ===")
+#         raise Exception(f"Failed to generate response: {str(e)}")
+
+class Component(BaseModel):
+    id: str            # Unique identifier for the component.
+    name: str          # Name of the component.
+    description: str   # Description of what the component does.
+
+class Relationship(BaseModel):
+    source: str        # The id of the originating component.
+    target: str        # The id of the target component.
+    label: str         # Description of the relationship.
+    direction: Literal["forward", "bidirectional"]  # The arrow direction.
+
+class SystemDesign(BaseModel):
+    components: List[Component]
+    relationships: List[Relationship]
+
+def generate_concepts(messages: List[ChatMessage], is_pro: bool = False) -> Dict[str, ChatMessage]:
+    """
+    Generate a system design breakdown using OpenAI's chat completion API with structured output.
+    The response will consist of two top-level lists: "components" and "relationships". Each component
+    will have an "id", "name", and "description". Each relationship will include a "source", "target",
+    "label", and a "direction" (either "forward" for a one-way connection or "bidirectional" for a two-way connection).
+
+    Args:
+        messages (List[ChatMessage]): List of chat messages.
+        is_pro (bool): Whether the user has a pro subscription.
+
+    Returns:
+        Dict containing the assistant's response message with the JSON-formatted system design breakdown.
+    """
+    if client is None:
+        raise Exception("OpenAI client not initialized")
+
+    # Construct API messages by prepending the system design prompt.
+    api_messages = [{"role": "developer", "content": SYSTEM_DESIGN_PROMPT}, *messages]
+
+    try:
+        # Call the beta API method that supports structured output.
+        # The response_format parameter is set to the SystemDesign class, which defines the expected output.
+        completion = client.beta.chat.completions.parse(
+            model="gpt-4o-2024-08-06",
+            messages=api_messages,
+            response_format=SystemDesign,
+            temperature=0
+        )
+
+        # Retrieve the parsed SystemDesign response.
+        system_design = completion.choices[0].message.parsed
+
+        # Return the JSON-formatted system design response.
+        return {"message": {"role": "assistant", "content": system_design.model_dump_json(indent=2)}}
+
+    except Exception as e:
+        print(f"=== ERROR: Exception when calling OpenAI API: {e} ===")
+        raise Exception(f"Failed to generate response: {str(e)}")
