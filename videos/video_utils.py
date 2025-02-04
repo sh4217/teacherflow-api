@@ -94,73 +94,6 @@ async def prepare_video_prerequisites(
     
     return json_content, audio_file_path, audio_duration, output_path, generation_dir
 
-async def run_manim_code(
-    manim_code: str,
-    scene_class_name: str,
-    video_filename: str,
-    output_path: Path,
-    generation_dir: Optional[Path],
-    update_progress: callable,
-    attempt: int
-) -> str:
-    """
-    Run Manim code in a temporary directory and save the generated video to the appropriate locations.
-    Returns the filename of the generated video.
-    """
-    # Create a temporary directory to render the video
-    with tempfile.TemporaryDirectory() as temp_dir:
-        temp_dir_path = Path(temp_dir)
-        temp_file_path = temp_dir_path / "scene.py"
-        print(f"=== DEBUG: Created temporary directory: {temp_dir} ===")
-        
-        with open(temp_file_path, "w") as f:
-            f.write(manim_code)
-        print(f"=== DEBUG: Written Manim code to: {temp_file_path} ===")
-        
-        await update_progress(90)
-        
-        # Run Manim command
-        cmd = ["manim", "-qm", str(temp_file_path), scene_class_name, "-o", video_filename]
-        print(f"=== DEBUG: Running Manim command: {' '.join(cmd)} ===")
-        subprocess.run(cmd, cwd=temp_dir, capture_output=True, text=True, check=True)
-        print("=== DEBUG: Manim command completed successfully ===")
-        
-        await update_progress(100)
-        
-        # Locate the rendered video
-        video_pattern = f"media/videos/**/720p30/{video_filename}"
-        print(f"=== DEBUG: Searching for video with pattern: {video_pattern} ===")
-        rendered_videos = list(Path(temp_dir).glob(video_pattern))
-        print(f"=== DEBUG: Found {len(rendered_videos)} matching videos ===")
-        
-        if not rendered_videos:
-            raise Exception(f"Could not find rendered video with pattern: {video_pattern}")
-        
-        rendered_video = rendered_videos[0]
-        
-        # In debug mode, save to both locations
-        if DEBUG_MODE:
-            print(f"=== DEBUG: Moving video from {rendered_video} to {output_path} ===")
-            shutil.copy2(str(rendered_video), str(output_path))
-            
-            # Also save to videos directory for serving
-            videos_path = VIDEOS_DIR / video_filename
-            print(f"=== DEBUG: Copying video to serving location: {videos_path} ===")
-            shutil.copy2(str(rendered_video), str(videos_path))
-            
-            # Save successful code
-            if generation_dir:
-                success_file = generation_dir / f"success-{attempt + 1}.py"
-                with open(success_file, "w") as f:
-                    f.write(manim_code)
-                print(f"=== DEBUG: Saved successful code to: {success_file} ===")
-        else:
-            # In production, just move to videos directory
-            print(f"=== DEBUG: Moving video from {rendered_video} to {output_path} ===")
-            shutil.move(str(rendered_video), str(output_path))
-        
-        return video_filename
-
 async def generate_and_render_video(
     job_id: str,
     user_query: str,
@@ -240,3 +173,70 @@ async def generate_and_render_video(
             continue
             
     raise Exception("Failed to generate video after all attempts")
+
+async def run_manim_code(
+    manim_code: str,
+    scene_class_name: str,
+    video_filename: str,
+    output_path: Path,
+    generation_dir: Optional[Path],
+    update_progress: callable,
+    attempt: int
+) -> str:
+    """
+    Run Manim code in a temporary directory and save the generated video to the appropriate locations.
+    Returns the filename of the generated video.
+    """
+    # Create a temporary directory to render the video
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_dir_path = Path(temp_dir)
+        temp_file_path = temp_dir_path / "scene.py"
+        print(f"=== DEBUG: Created temporary directory: {temp_dir} ===")
+        
+        with open(temp_file_path, "w") as f:
+            f.write(manim_code)
+        print(f"=== DEBUG: Written Manim code to: {temp_file_path} ===")
+        
+        await update_progress(90)
+        
+        # Run Manim command
+        cmd = ["manim", "-qm", str(temp_file_path), scene_class_name, "-o", video_filename]
+        print(f"=== DEBUG: Running Manim command: {' '.join(cmd)} ===")
+        subprocess.run(cmd, cwd=temp_dir, capture_output=True, text=True, check=True)
+        print("=== DEBUG: Manim command completed successfully ===")
+        
+        await update_progress(100)
+        
+        # Locate the rendered video
+        video_pattern = f"media/videos/**/720p30/{video_filename}"
+        print(f"=== DEBUG: Searching for video with pattern: {video_pattern} ===")
+        rendered_videos = list(Path(temp_dir).glob(video_pattern))
+        print(f"=== DEBUG: Found {len(rendered_videos)} matching videos ===")
+        
+        if not rendered_videos:
+            raise Exception(f"Could not find rendered video with pattern: {video_pattern}")
+        
+        rendered_video = rendered_videos[0]
+        
+        # In debug mode, save to both locations
+        if DEBUG_MODE:
+            print(f"=== DEBUG: Moving video from {rendered_video} to {output_path} ===")
+            shutil.copy2(str(rendered_video), str(output_path))
+            
+            # Also save to videos directory for serving
+            videos_path = VIDEOS_DIR / video_filename
+            print(f"=== DEBUG: Copying video to serving location: {videos_path} ===")
+            shutil.copy2(str(rendered_video), str(videos_path))
+            
+            # Save successful code
+            if generation_dir:
+                success_file = generation_dir / f"success-{attempt + 1}.py"
+                with open(success_file, "w") as f:
+                    f.write(manim_code)
+                print(f"=== DEBUG: Saved successful code to: {success_file} ===")
+        else:
+            # In production, just move to videos directory
+            print(f"=== DEBUG: Moving video from {rendered_video} to {output_path} ===")
+            shutil.move(str(rendered_video), str(output_path))
+        
+        return video_filename

@@ -43,10 +43,6 @@ class ManimRequest(BaseModel):
 # In-memory job store
 jobs: Dict[str, JobMetadata] = {}
 
-# Add this near other directory constants
-JSON_DIR = Path("json")
-JSON_DIR.mkdir(exist_ok=True)
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
@@ -68,7 +64,6 @@ AUDIO_DIR = Path("audio")
 AUDIO_DIR.mkdir(exist_ok=True)
 
 app.mount("/videos", StaticFiles(directory="videos"), name="videos")
-app.mount("/json", StaticFiles(directory="json"), name="json")
 
 @app.get("/health")
 async def health_check():
