@@ -215,8 +215,8 @@ async def process_video_job(
                         shutil.copy2(output_path, video_copy)
                         print(f"=== DEBUG: Copied video to: {video_copy} ===")
                     else:
-                        shutil.copy2(output_path, VIDEOS_DIR / video_filename)
-                        print(f"=== DEBUG: Copied video to videos directory ===")
+                        # In production, the output_path is already in VIDEOS_DIR, no need to copy
+                        print(f"=== DEBUG: Video already in videos directory: {output_path} ===")
                     
                     print("=== DEBUG: Video generation completed successfully ===")
                     jobs[job_id].status = JobStatus.COMPLETED
