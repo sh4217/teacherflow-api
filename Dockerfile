@@ -8,6 +8,7 @@ RUN echo "Starting system dependencies installation..." && \
     apt-get update && \
     echo "Installing required packages..." && \
     apt-get install -y \
+    ffmpeg \
     texlive \
     texlive-latex-extra \
     texlive-fonts-extra \
