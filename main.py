@@ -57,11 +57,9 @@ app.add_middleware(
     allow_headers=["Content-Type"],
 )
 
+# Constants
 VIDEOS_DIR = Path("videos")
 VIDEOS_DIR.mkdir(exist_ok=True)
-
-AUDIO_DIR = Path("audio")
-AUDIO_DIR.mkdir(exist_ok=True)
 
 app.mount("/videos", StaticFiles(directory="videos"), name="videos")
 
@@ -95,8 +93,6 @@ async def process_video_job(
     is_pro: bool
 ):
     """Background task to process the video generation job"""
-    audio_file_path = None
-    
     async def update_progress(progress: int, status: JobStatus = JobStatus.IN_PROGRESS):
         """Helper function to update job progress with sufficient sleep time"""
         jobs[job_id].status = status
@@ -106,15 +102,15 @@ async def process_video_job(
     try:
         print(f"=== DEBUG: Starting system design video job {job_id} ===")
         
-        # Prepare all prerequisites (content, audio, paths)
-        json_content, audio_file_path, audio_duration, output_path, generation_dir = await prepare_video_prerequisites(
+        # Prepare initial prerequisites (content and script)
+        json_content, script_content, video_id = await prepare_video_prerequisites(
             job_id, user_query, is_pro, update_progress
         )
         
         # Generate and render the video
         video_filename = await generate_and_render_video(
-            job_id, user_query, json_content, audio_file_path, audio_duration,
-            output_path, generation_dir, update_progress
+            job_id, user_query, json_content, script_content, video_id,
+            is_pro, update_progress
         )
         
         # Update job status
@@ -122,27 +118,10 @@ async def process_video_job(
         jobs[job_id].progress = 100
         jobs[job_id].videoUrl = video_filename
         
-        # Clean up audio file after successful video generation
-        if audio_file_path:
-            try:
-                if audio_file_path.exists():
-                    audio_file_path.unlink()
-                    print(f"=== DEBUG: Cleaned up audio file: {audio_file_path} ===")
-            except Exception as cleanup_error:
-                print(f"=== ERROR: Failed to clean up audio file: {cleanup_error} ===")
-        
     except Exception as e:
         print(f"=== ERROR: Exception in system design video job {job_id}: {str(e)} ===")
         jobs[job_id].status = JobStatus.FAILED
         jobs[job_id].progress = 0
-        # Clean up audio file on any unexpected error
-        if audio_file_path:
-            try:
-                if audio_file_path.exists():
-                    audio_file_path.unlink()
-                    print(f"=== DEBUG: Cleaned up audio file after error: {audio_file_path} ===")
-            except Exception as cleanup_error:
-                print(f"=== ERROR: Failed to clean up audio file: {cleanup_error} ===")
         raise
 
 @app.post("/generate-video")

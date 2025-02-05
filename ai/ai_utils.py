@@ -151,8 +151,6 @@ def generate_system_design(user_question: str, json_data: str, previous_code: st
             audio_file_path=audio_file_path,
             audio_duration=audio_duration
         )
-    
-    print(f"=== DEBUG: Using prompt:\n{prompt_text}\n=== END PROMPT ===")
 
     try:
         print("=== DEBUG: Calling OpenAI API for Manim code generation ===")
@@ -168,7 +166,6 @@ def generate_system_design(user_question: str, json_data: str, previous_code: st
 
         content = response.choices[0].message.content
         print(f"=== DEBUG: Received Manim code response ({len(content)} chars) ===")
-        print(f"=== DEBUG: First 200 chars of response:\n{content[:200]}...\n=== END PREVIEW ===")
         return content
 
     except Exception as e:
@@ -200,8 +197,6 @@ def generate_concepts(messages: List[ChatMessage], is_pro: bool = False) -> Dict
     
     # Construct API messages with the formatted prompt
     api_messages = [{"role": "developer", "content": formatted_prompt}, *messages]
-    print("=== DEBUG: Constructed API messages with system design prompt ===")
-    print(f"=== DEBUG: System prompt:\n{formatted_prompt}\n=== END PROMPT ===")
 
     try:
         print("=== DEBUG: Calling OpenAI API for structured system design ===")
@@ -220,8 +215,6 @@ def generate_concepts(messages: List[ChatMessage], is_pro: bool = False) -> Dict
 
         # Return the JSON-formatted system design response.
         json_response = system_design.model_dump_json(indent=2)
-        print(f"=== DEBUG: Generated JSON response ({len(json_response)} chars) ===")
-        print(f"=== DEBUG: First 200 chars of JSON:\n{json_response[:200]}...\n=== END PREVIEW ===")
         
         return {"message": {"role": "assistant", "content": json_response}}
 

@@ -85,12 +85,13 @@ def validate_audio_file(file: UploadFile) -> Tuple[bool, Optional[str]]:
     except Exception as e:
         return False, f"Error validating audio: {str(e)}"
 
-async def generate_and_prepare_audio_files(scenes: List[str]) -> List[UploadFile]:
+async def generate_and_prepare_audio_files(scenes: List[str], output_dir: Path) -> List[UploadFile]:
     """
     Generate audio files for each scene and prepare them as UploadFiles.
     
     Args:
         scenes: List of scene text content
+        output_dir: Directory where audio files will be saved
         
     Returns:
         List of UploadFile objects containing the generated audio
@@ -98,11 +99,10 @@ async def generate_and_prepare_audio_files(scenes: List[str]) -> List[UploadFile
     Raises:
         HTTPException: If audio generation fails for any scene
     """
-    AUDIO_DIR = Path("audio")
     audio_files = []
     for i, scene in enumerate(scenes):
         audio_filename = f"{uuid4()}.mp3"
-        audio_path = AUDIO_DIR / audio_filename
+        audio_path = output_dir / audio_filename
         
         try:
             success = await generate_speech(scene, audio_path)
@@ -112,7 +112,7 @@ async def generate_and_prepare_audio_files(scenes: List[str]) -> List[UploadFile
                 audio_path.unlink()
                 for file in audio_files:
                     try:
-                        (AUDIO_DIR / file).unlink()
+                        (output_dir / file).unlink()
                     except:
                         pass
                 raise HTTPException(
@@ -125,58 +125,7 @@ async def generate_and_prepare_audio_files(scenes: List[str]) -> List[UploadFile
 
     saved_audio_files = []
     for audio_filename in audio_files:
-        audio_path = AUDIO_DIR / audio_filename
-        saved_audio_files.append(
-            UploadFile(
-                file=open(audio_path, 'rb'),
-                filename=audio_filename,
-                headers={"content-type": "audio/mpeg"}
-            )
-        )
-    
-    return saved_audio_files
-
-async def generate_and_prepare_new_audio_files(scenes: List[str]) -> List[UploadFile]:
-    """
-    Generate audio files for each scene and prepare them as UploadFiles.
-    
-    Args:
-        scenes: List of scene text content
-        
-    Returns:
-        List of UploadFile objects containing the generated audio
-        
-    Raises:
-        HTTPException: If audio generation fails for any scene
-    """
-    AUDIO_DIR = Path("audio")
-    audio_files = []
-    for i, scene in enumerate(scenes):
-        audio_filename = f"{uuid4()}.mp3"
-        audio_path = AUDIO_DIR / audio_filename
-        
-        try:
-            success = await generate_speech(scene, audio_path)
-            if success:
-                audio_files.append(audio_filename)
-            else:
-                audio_path.unlink()
-                for file in audio_files:
-                    try:
-                        (AUDIO_DIR / file).unlink()
-                    except:
-                        pass
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to generate audio for scene {i + 1}"
-                )
-        except:
-            audio_path.unlink()
-            raise
-
-    saved_audio_files = []
-    for audio_filename in audio_files:
-        audio_path = AUDIO_DIR / audio_filename
+        audio_path = output_dir / audio_filename
         saved_audio_files.append(
             UploadFile(
                 file=open(audio_path, 'rb'),
