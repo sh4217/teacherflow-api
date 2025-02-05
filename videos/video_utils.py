@@ -244,7 +244,7 @@ def concatenate_scenes(
     If only one video exists, it will be renamed to the desired filename.
     
     Args:
-        rendered_videos: List of rendered video file paths
+        rendered_videos: List of rendered video file paths (sorted alphabetically)
         temp_dir_path: Path to temporary directory
         video_filename: Desired filename for the output video
         
@@ -253,7 +253,8 @@ def concatenate_scenes(
     """
     if len(rendered_videos) > 1:
         print("=== DEBUG: Multiple scenes found, concatenating videos ===")
-        # Create a file listing all videos to concatenate
+        
+        # Create a file listing all videos to concatenate in order
         concat_file = temp_dir_path / "concat.txt"
         with open(concat_file, "w") as f:
             for video in rendered_videos:
