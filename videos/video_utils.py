@@ -24,7 +24,6 @@ DEBUG_DIR = Path("debug")  # Changed from code to debug
 
 async def prepare_video_prerequisites(
     user_query: str,
-    is_pro: bool,
     update_progress: callable
 ) -> Tuple[str, str, List[str]]:
     """
@@ -38,13 +37,13 @@ async def prepare_video_prerequisites(
     print("=== DEBUG: Step 1 - Generating system design JSON ===")
     await update_progress(10)
     messages = [{"role": "user", "content": user_query}]
-    concept_response = generate_concepts(messages, is_pro=is_pro)
+    concept_response = generate_concepts(messages)
     json_content = concept_response["message"]["content"]
     
     # Step 2: Generate voiceover script
     print("=== DEBUG: Step 2 - Generating voiceover script ===")
     await update_progress(20)
-    script_response = generate_text(messages, is_pro=is_pro)
+    script_response = generate_text(messages)
     script_contents = script_response["message"]["content"]  # Now a list of scene content
     
     await update_progress(30)
