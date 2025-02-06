@@ -6,39 +6,12 @@ from pathlib import Path
 from manim import *
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
-from enum import Enum
-from pydantic import BaseModel
 import asyncio
 from videos.video_utils import (
     prepare_video_prerequisites,
     generate_and_render_video
 )
-
-# Job status enum
-class JobStatus(str, Enum):
-    PENDING = "pending"
-    IN_PROGRESS = "in_progress"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-# Job metadata model
-class JobMetadata(BaseModel):
-    job_id: str
-    status: JobStatus
-    progress: float = 0.0
-    videoUrl: Optional[str] = None
-
-# Text request model
-class TextRequest(BaseModel):
-    query: str
-    is_pro: Optional[bool] = False
-
-class ConceptRequest(BaseModel):
-    query: str
-    is_pro: Optional[bool] = False
-
-class ManimRequest(BaseModel):
-    query: str
+from models import JobStatus, JobMetadata, ConceptRequest
 
 # In-memory job store
 jobs: Dict[str, JobMetadata] = {}
@@ -103,14 +76,17 @@ async def process_video_job(
         print(f"=== DEBUG: Starting system design video job {job_id} ===")
         
         # Prepare initial prerequisites (content and script)
-        json_content, script_content, video_id = await prepare_video_prerequisites(
-            job_id, user_query, is_pro, update_progress
+        json_content, video_id, script_contents = await prepare_video_prerequisites(
+            user_query, is_pro, update_progress
         )
         
         # Generate and render the video
         video_filename = await generate_and_render_video(
-            job_id, user_query, json_content, script_content, video_id,
-            is_pro, update_progress
+            user_query, 
+            json_content, 
+            video_id, 
+            script_contents,
+            update_progress
         )
         
         # Update job status

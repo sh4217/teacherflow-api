@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Tuple
+from typing import Tuple, List
 from uuid import uuid4
 import tempfile
 import subprocess
@@ -8,7 +8,7 @@ import os
 from dotenv import load_dotenv
 from fastapi import HTTPException
 
-from audio.audio_utils import generate_and_prepare_audio_files, get_audio_duration
+from audio.audio_utils import generate_audio
 from ai.ai_utils import generate_concepts, generate_system_design, generate_text
 
 # Load environment variables
@@ -23,14 +23,13 @@ AUDIO_DIR = Path("audio")
 DEBUG_DIR = Path("debug")  # Changed from code to debug
 
 async def prepare_video_prerequisites(
-    job_id: str,
     user_query: str,
     is_pro: bool,
     update_progress: callable
-) -> Tuple[str, str, str]:
+) -> Tuple[str, str, List[str]]:
     """
     Prepare initial prerequisites for video generation including content and script.
-    Returns tuple of (json_content, script_content, video_id)
+    Returns tuple of (json_content, video_id, script_contents)
     """
     # Generate a single UUID for all related files
     video_id = str(uuid4())
@@ -46,19 +45,17 @@ async def prepare_video_prerequisites(
     print("=== DEBUG: Step 2 - Generating voiceover script ===")
     await update_progress(20)
     script_response = generate_text(messages, is_pro=is_pro)
-    script_content = script_response["message"]["content"]
+    script_contents = script_response["message"]["content"]  # Now a list of scene content
     
     await update_progress(30)
     
-    return json_content, script_content, video_id
+    return json_content, video_id, script_contents
 
 async def generate_and_render_video(
-    job_id: str,
     user_query: str,
     json_content: str,
-    script_content: str,
     video_id: str,
-    is_pro: bool,
+    script_contents: List[str],
     update_progress: callable
 ) -> str:
     """
@@ -91,36 +88,6 @@ async def generate_and_render_video(
         temp_dir_path = Path(temp_dir)
         print(f"=== DEBUG: Created temporary directory: {temp_dir} ===")
         
-        # Step 3: Generate audio from script in temp directory
-        print("=== DEBUG: Step 3 - Generating audio from script ===")
-        await update_progress(40)
-        audio_dir = temp_dir_path / "audio"
-        audio_dir.mkdir(exist_ok=True)
-        
-        scenes = [script_content]  # Wrap in list since the method expects multiple scenes
-        audio_files = await generate_and_prepare_audio_files(scenes, output_dir=audio_dir)
-        
-        if not audio_files:
-            raise Exception("Failed to generate audio files")
-            
-        # Get the audio file path and duration
-        audio_file = audio_files[0]  # We only have one audio file
-        audio_file_path = audio_dir / audio_file.filename
-        audio_duration = get_audio_duration(str(audio_file_path))
-        
-        print(f"=== DEBUG: Generated audio file: {audio_file_path} with duration {audio_duration}s ===")
-        
-        # Create media/audio directory for Manim
-        manim_media_dir = temp_dir_path / "media"
-        manim_audio_dir = manim_media_dir / "audio"
-        manim_audio_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Copy audio file to Manim's media/audio directory
-        manim_audio_path = manim_audio_dir / audio_file.filename
-        shutil.copy2(str(audio_file_path), str(manim_audio_path))
-        
-        print(f"=== DEBUG: Copied audio file to Manim media directory: {manim_audio_path} ===")
-        
         # Set output paths
         if DEBUG_MODE:
             output_path = generation_dir / video_filename
@@ -129,19 +96,32 @@ async def generate_and_render_video(
             output_path = VIDEOS_DIR / video_filename
             print("=== DEBUG: Debug mode OFF - Using direct video output ===")
         
+        # Create media directory structure
+        media_dir = temp_dir_path / "media"
+        media_dir.mkdir(exist_ok=True)
+        audio_dir = media_dir / "audio"
+        audio_dir.mkdir(exist_ok=True)
+        
+        # Step 3: Generate audio from script
+        print("=== DEBUG: Step 3 - Generating audio from script ===")
+        await update_progress(40)
+        
+        # Generate audio files for each scene
+        audio_files = await generate_audio(audio_dir, script_contents)
+        
         await update_progress(60)
         
         while attempt <= max_retries:
             try:
                 print(f"=== DEBUG: Attempt {attempt + 1}/{max_retries + 1} to generate and render video ===")
-                # Generate the system design Manim code with relative audio path
+                
+                # Generate the system design Manim code with audio paths and durations
                 manim_code = generate_system_design(
                     user_query, 
                     json_content, 
                     previous_code=last_code, 
                     error_message=last_error,
-                    audio_file_path=f"media/audio/{audio_file.filename}",  # Updated path to use media/audio
-                    audio_duration=audio_duration
+                    audio_files=audio_files
                 )
                 if not manim_code:
                     raise HTTPException(status_code=500, detail="Failed to generate system design Manim code")
@@ -245,84 +225,34 @@ def concatenate_scenes(
     Returns:
         Path to the final video file
     """
-    if len(rendered_videos) > 1:
-        print("=== DEBUG: Multiple scenes found, concatenating videos ===")
-        
-        # First, analyze each video to check for audio streams
-        input_args = []
-        video_filter_parts = []
-        audio_index = None
-        
-        for i, video in enumerate(rendered_videos):
-            # Add input file
-            input_args.extend(["-i", str(video)])
-            
-            # Check if this video has audio
-            probe_cmd = ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", 
-                        "stream=codec_type", "-of", "default=nw=1:nk=1", str(video)]
-            result = subprocess.run(probe_cmd, capture_output=True, text=True)
-            
-            # Add to video filter
-            video_filter_parts.append(f"[{i}:v]")
-            
-            # Remember which input has audio (we'll use the first one we find)
-            if audio_index is None and result.stdout.strip() == "audio":
-                audio_index = i
-                print(f"=== DEBUG: Found audio stream in video {i} ===")
-        
-        # Construct filter complex based on available streams
-        filter_complex = "".join(video_filter_parts)
-        
-        # If we found an audio stream, create a silent audio for other segments
-        if audio_index is not None:
-            # First concatenate all videos
-            filter_complex += f"concat=n={len(rendered_videos)}:v=1:a=0[outv];"
-            
-            # Then handle audio separately - create silent audio for parts before and after
-            if audio_index > 0:
-                # Add silence before the audio
-                filter_complex += f"aevalsrc=0:d={(4 if audio_index == 0 else 6.5) * audio_index}[silence1];"
-            
-            # Add the actual audio
-            filter_complex += f"[{audio_index}:a]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[audio];"
-            
-            if audio_index < len(rendered_videos) - 1:
-                # Add silence after the audio
-                remaining_duration = sum(6.5 if i > 0 else 4.0 for i in range(audio_index + 1, len(rendered_videos)))
-                filter_complex += f"aevalsrc=0:d={remaining_duration}[silence2];"
-            
-            # Concatenate all audio parts
-            audio_parts = []
-            if audio_index > 0:
-                audio_parts.append("[silence1]")
-            audio_parts.append("[audio]")
-            if audio_index < len(rendered_videos) - 1:
-                audio_parts.append("[silence2]")
-            
-            filter_complex += "".join(audio_parts) + f"concat=n={len(audio_parts)}:v=0:a=1[outa]"
-            output_maps = ["-map", "[outv]", "-map", "[outa]"]
-        else:
-            # No audio found, just concatenate videos
-            filter_complex += f"concat=n={len(rendered_videos)}:v=1:a=0[outv]"
-            output_maps = ["-map", "[outv]"]
-        
-        # Use ffmpeg with concat filter to properly handle both video and audio
-        combined_video = temp_dir_path / video_filename
-        concat_cmd = [
-            "ffmpeg",
-            *input_args,
-            "-filter_complex", filter_complex,
-            *output_maps,
-            str(combined_video)
-        ]
-        print(f"=== DEBUG: Running ffmpeg concat command: {' '.join(concat_cmd)} ===")
-        result = subprocess.run(concat_cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            print(f"=== ERROR: ffmpeg concat failed ===\nStdout:\n{result.stdout}\nStderr:\n{result.stderr}")
-            result.check_returncode()
-        return combined_video
-    else:
-        # Single video case - just rename to desired filename
-        rendered_video = temp_dir_path / video_filename
-        shutil.move(str(rendered_videos[0]), str(rendered_video))
-        return rendered_video
+    # Create a file listing of all videos to concatenate in order
+    concat_file = temp_dir_path / "concat.txt"
+    with open(concat_file, "w") as f:
+        for video in rendered_videos:
+            f.write(f"file '{video.absolute()}'\n")
+    
+    print(f"=== DEBUG: Created concat file at {concat_file} ===")
+    print("=== DEBUG: Concat file contents ===")
+    with open(concat_file, "r") as f:
+        print(f.read())
+    
+    # Use ffmpeg concat demuxer to concatenate the videos
+    combined_video = temp_dir_path / video_filename
+    concat_cmd = [
+        "ffmpeg",
+        "-f", "concat",
+        "-safe", "0",
+        "-i", str(concat_file),
+        "-c", "copy",  # Stream copy without re-encoding
+        str(combined_video)
+    ]
+    print(f"\n=== DEBUG: Running ffmpeg concat command: {' '.join(concat_cmd)} ===")
+    result = subprocess.run(concat_cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"=== ERROR: ffmpeg concat failed ===\nStdout:\n{result.stdout}\nStderr:\n{result.stderr}")
+        result.check_returncode()
+    
+    # Verify the output
+    print(f"\n=== DEBUG: Verifying concatenated output ===")
+    
+    return combined_video

@@ -1,11 +1,11 @@
-from fastapi import UploadFile, HTTPException
+from fastapi import UploadFile
 from typing import Optional, Tuple, List
 from pathlib import Path
 import tempfile
 import mutagen
 import shutil
-from uuid import uuid4
 from ai.ai_utils import generate_speech
+from models import AudioFile
 
 # Constants
 MAX_AUDIO_SIZE_BYTES = 10 * 1024 * 1024  # 10MB
@@ -85,53 +85,38 @@ def validate_audio_file(file: UploadFile) -> Tuple[bool, Optional[str]]:
     except Exception as e:
         return False, f"Error validating audio: {str(e)}"
 
-async def generate_and_prepare_audio_files(scenes: List[str], output_dir: Path) -> List[UploadFile]:
+async def generate_audio(audio_dir: Path, script_contents: List[str]) -> List[AudioFile]:
     """
-    Generate audio files for each scene and prepare them as UploadFiles.
+    Generate audio files for each scene and return their paths and durations.
     
     Args:
-        scenes: List of scene text content
-        output_dir: Directory where audio files will be saved
+        audio_dir: Directory where audio files will be saved
+        script_contents: List of scene text content
         
     Returns:
-        List of UploadFile objects containing the generated audio
+        List of AudioFile objects containing path and duration
         
     Raises:
-        HTTPException: If audio generation fails for any scene
+        Exception: If audio generation fails for any scene
     """
     audio_files = []
-    for i, scene in enumerate(scenes):
-        audio_filename = f"{uuid4()}.mp3"
-        audio_path = output_dir / audio_filename
+    for i, scene_content in enumerate(script_contents):
+        audio_filename = f"scene_{i + 1}.mp3"
+        audio_path = audio_dir / audio_filename
         
         try:
-            success = await generate_speech(scene, audio_path)
+            success = await generate_speech(scene_content, audio_path)
             if success:
-                audio_files.append(audio_filename)
+                duration = get_audio_duration(str(audio_path))
+                audio_files.append(AudioFile(
+                    path=str(audio_path),
+                    duration=duration
+                ))
+                print(f"=== DEBUG: Generated audio file: {audio_filename} with duration {duration}s ===")
             else:
-                audio_path.unlink()
-                for file in audio_files:
-                    try:
-                        (output_dir / file).unlink()
-                    except:
-                        pass
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to generate audio for scene {i + 1}"
-                )
-        except:
-            audio_path.unlink()
+                raise Exception(f"Failed to generate audio for scene {i + 1}")
+        except Exception as e:
+            print(f"=== ERROR: Audio generation failed for scene {i + 1}: {str(e)} ===")
             raise
-
-    saved_audio_files = []
-    for audio_filename in audio_files:
-        audio_path = output_dir / audio_filename
-        saved_audio_files.append(
-            UploadFile(
-                file=open(audio_path, 'rb'),
-                filename=audio_filename,
-                headers={"content-type": "audio/mpeg"}
-            )
-        )
     
-    return saved_audio_files
+    return audio_files

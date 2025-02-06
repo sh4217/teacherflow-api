@@ -5,12 +5,9 @@ from typing import List, Dict, Literal, Optional, TypedDict
 import time
 from pathlib import Path
 from .constants import *
+from models import AudioFile, SystemDesign, ChatMessage
 
-from typing import List, Literal
-from pydantic import BaseModel
-
-
-# Load environment variables from .env file
+# Load environment variables
 load_dotenv()
 
 # Initialize OpenAI client at module level
@@ -29,32 +26,45 @@ class ChatMessage(TypedDict):
     role: Literal['user', 'assistant', 'system', 'developer']
     content: str
     videoUrl: Optional[str]
-
-class Component(BaseModel):
-    id: str            # Unique identifier for the component.
-    name: str          # Name of the component.
-    description: str   # Description of what the component does.
-
-class Relationship(BaseModel):
-    source: str        # The id of the originating component.
-    target: str        # The id of the target component.
-    label: str         # Description of the relationship.
-    direction: Literal["forward", "bidirectional"]  # The arrow direction.
-
-class SystemDesign(BaseModel):
-    components: List[Component]
-    relationships: List[Relationship]
     
-def generate_text(messages: List[ChatMessage], is_pro: bool = False) -> Dict[str, ChatMessage]:
+def parse_scenes(text: str) -> List[str]:
+    """
+    Parse scene content from text containing <scene> tags.
+    Returns a list of scene content strings.
+    """
+    scenes = []
+    current_pos = 0
+    
+    while True:
+        # Find start of next scene
+        start = text.find("<scene>", current_pos)
+        if start == -1:
+            break
+            
+        # Find end of this scene
+        end = text.find("</scene>", start)
+        if end == -1:
+            break
+            
+        # Extract scene content (excluding tags)
+        scene_content = text[start + 7:end].strip()
+        scenes.append(scene_content)
+        
+        current_pos = end + 8
+    
+    return scenes
+
+def generate_text(messages: List[ChatMessage], is_pro: bool = False) -> Dict[str, List[str]]:
     """
     Generate text response using OpenAI's chat completion API.
+    Parses the response into individual scene content.
     
     Args:
         messages (List[ChatMessage]): List of chat messages
         is_pro (bool): Whether the user has a pro subscription
         
     Returns:
-        Dict containing the assistant's response message
+        Dict containing the list of scene content strings
     """
     if client is None:
         raise Exception("OpenAI client not initialized")
@@ -73,7 +83,13 @@ def generate_text(messages: List[ChatMessage], is_pro: bool = False) -> Dict[str
         )
 
         completion = response.choices[0].message.content
-        return {"message": {"role": "assistant", "content": completion}}
+        scenes = parse_scenes(completion)
+        
+        if not scenes:
+            # If no scenes found, treat entire response as one scene
+            scenes = [completion.strip()]
+            
+        return {"message": {"role": "assistant", "content": scenes}}
     
     except Exception as e:
         print(f"=== ERROR: Exception when calling OpenAI API: {e} ===")
@@ -116,7 +132,7 @@ async def generate_speech(text: str, output_path: Path) -> bool:
 
     return False
 
-def generate_system_design(user_question: str, json_data: str, previous_code: str = None, error_message: str = None, audio_file_path: str = None, audio_duration: float = None) -> str:
+def generate_system_design(user_question: str, json_data: str, previous_code: str = None, error_message: str = None, audio_files: List[AudioFile] = None) -> str:
     """
     Calls OpenAI API to generate Manim code for system design visualization, using both the question and JSON data.
     
@@ -125,6 +141,7 @@ def generate_system_design(user_question: str, json_data: str, previous_code: st
         json_data (str): The JSON string containing system design components and relationships
         previous_code (str, optional): The previous code that failed
         error_message (str, optional): The error message from the failed attempt
+        audio_files (List[AudioFile], optional): List of audio files with their paths and durations
         
     Returns:
         str: The Manim Python code as a string
@@ -148,8 +165,7 @@ def generate_system_design(user_question: str, json_data: str, previous_code: st
         prompt_text = MANIM_SCENE_PROMPT.format(
             user_question=user_question,
             json_data=json_data,
-            audio_file_path=audio_file_path,
-            audio_duration=audio_duration
+            audio_files=audio_files
         )
 
     try:
