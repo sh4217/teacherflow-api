@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from fastapi import HTTPException
 
 from audio.audio_utils import generate_audio
-from ai.ai_utils import generate_concepts, generate_system_design, generate_text
+from ai.ai_utils import generate_concepts, generate_manim_code, generate_text
 
 # Load environment variables
 load_dotenv()
@@ -68,55 +68,27 @@ async def generate_and_render_video(
     last_error = None
     last_code = None
     
-    # Create debug directory if needed
-    generation_dir = None
-    if DEBUG_MODE:
-        DEBUG_DIR.mkdir(exist_ok=True)
-        generation_dir = DEBUG_DIR / video_id
-        generation_dir.mkdir(exist_ok=True)
-        
-        # Save JSON to debug directory
-        json_filename = f"{video_id}.json"
-        json_path = generation_dir / json_filename
-        print(f"=== DEBUG: Saving JSON to {json_path} ===")
-        with open(json_path, 'w') as f:
-            f.write(json_content)
-        print("=== DEBUG: JSON saved successfully ===")
+    # Set up directories
+    videos_dir_path, generation_dir, temp_dir_path = setup_directories(video_id, DEBUG_MODE)
     
-    # Create a temporary directory for all file operations
-    with tempfile.TemporaryDirectory() as temp_dir:
-        temp_dir_path = Path(temp_dir)
-        print(f"=== DEBUG: Created temporary directory: {temp_dir} ===")
-        
-        # Set output paths
+    try:
+        # Save initial debug files if in debug mode
         if DEBUG_MODE:
-            output_path = generation_dir / video_filename
-            print(f"=== DEBUG: Debug mode ON - Using debug directory: {generation_dir} ===")
-        else:
-            output_path = VIDEOS_DIR / video_filename
-            print("=== DEBUG: Debug mode OFF - Using direct video output ===")
+            save_debug_files(generation_dir, video_id, json_content, "", 0)
         
-        # Create media directory structure
-        media_dir = temp_dir_path / "media"
-        media_dir.mkdir(exist_ok=True)
-        audio_dir = media_dir / "audio"
-        audio_dir.mkdir(exist_ok=True)
-        
-        # Step 3: Generate audio from script
+        # Generate audio
         print("=== DEBUG: Step 3 - Generating audio from script ===")
         await update_progress(40)
-        
-        # Generate audio files for each scene
+        audio_dir = temp_dir_path / "media" / "audio"
         audio_files = await generate_audio(audio_dir, script_contents)
-        
         await update_progress(60)
         
         while attempt <= max_retries:
             try:
                 print(f"=== DEBUG: Attempt {attempt + 1}/{max_retries + 1} to generate and render video ===")
                 
-                # Generate the system design Manim code with audio paths and durations
-                manim_code = generate_system_design(
+                # Generate Manim code
+                manim_code = generate_manim_code(
                     user_query, 
                     json_content, 
                     previous_code=last_code, 
@@ -128,60 +100,21 @@ async def generate_and_render_video(
                 
                 await update_progress(80)
                 
-                # Write and run the Manim code
-                temp_file_path = temp_dir_path / "scene.py"
-                with open(temp_file_path, "w") as f:
-                    f.write(manim_code)
-                print(f"=== DEBUG: Written Manim code to: {temp_file_path} ===")
-                
+                # Render individual scenes
+                rendered_videos = render_manim_scenes(temp_dir_path, manim_code)
                 await update_progress(90)
-
-                # Run Manim command
-                cmd = ["manim", "-qm", "-a", str(temp_file_path)]
-                print(f"=== DEBUG: Running Manim command: {' '.join(cmd)} ===")
-
-                result = subprocess.run(cmd, cwd=temp_dir, capture_output=True, text=True)
-                if result.returncode == 0:
-                    print("=== DEBUG: Manim command completed successfully ===")
-                else:
-                    print(f"=== ERROR: Manim command failed with return code {result.returncode} ===")
-                    result.check_returncode()  # This will raise CalledProcessError
                 
-                # Locate all rendered videos
-                video_pattern = "media/videos/**/720p30/*.mp4"
-                print(f"=== DEBUG: Searching for videos with pattern: {video_pattern} ===")
-                rendered_videos = sorted(list(Path(temp_dir).glob(video_pattern)))
-                print(f"=== DEBUG: Found {len(rendered_videos)} scene videos ===")
-                
-                if not rendered_videos:
-                    raise Exception(f"Could not find any rendered videos with pattern: {video_pattern}")
-                    
                 # Process videos to get a single output video
                 rendered_video = concatenate_scenes(rendered_videos, temp_dir_path, video_filename)
                 
-                await update_progress(100)
+                # Save the final video
+                save_final_video(rendered_video, videos_dir_path, generation_dir)
                 
-                # Save the video to appropriate locations
+                # Save successful debug files
                 if DEBUG_MODE:
-                    print(f"=== DEBUG: Moving video from {rendered_video} to {output_path} ===")
-                    shutil.copy2(str(rendered_video), str(output_path))
-                    
-                    # Also save to videos directory for serving
-                    videos_path = VIDEOS_DIR / video_filename
-                    print(f"=== DEBUG: Copying video to serving location: {videos_path} ===")
-                    shutil.copy2(str(rendered_video), str(videos_path))
-                    
-                    # Save successful code
-                    if generation_dir:
-                        success_file = generation_dir / f"success-{attempt + 1}.py"
-                        with open(success_file, "w") as f:
-                            f.write(manim_code)
-                        print(f"=== DEBUG: Saved successful code to: {success_file} ===")
-                else:
-                    # In production, just move to videos directory
-                    print(f"=== DEBUG: Moving video from {rendered_video} to {output_path} ===")
-                    shutil.move(str(rendered_video), str(output_path))
+                    save_debug_files(generation_dir, video_id, json_content, manim_code, attempt + 1)
                 
+                await update_progress(100)
                 return video_filename
                     
             except subprocess.CalledProcessError as e:
@@ -189,13 +122,8 @@ async def generate_and_render_video(
                 print(f"=== Command output (stdout) ===\n{e.stdout}")
                 print(f"=== Command output (stderr) ===\n{e.stderr}")
                 
-                if DEBUG_MODE and generation_dir:
-                    fail_file = generation_dir / f"fail-{attempt + 1}.py"
-                    with open(fail_file, "w") as f:
-                        f.write(manim_code)
-                        f.write("\n\n# Error details from Manim rendering:\n")
-                        f.write(f'error_message = """{e.stderr}"""')
-                    print(f"=== DEBUG: Saved failed code to: {fail_file} ===")
+                if DEBUG_MODE:
+                    save_debug_files(generation_dir, video_id, json_content, manim_code, attempt + 1, e.stderr)
                 
                 if attempt == max_retries:
                     raise
@@ -204,8 +132,98 @@ async def generate_and_render_video(
                 last_code = manim_code
                 attempt += 1
                 continue
+    finally:
+        # Clean up temporary directory
+        shutil.rmtree(temp_dir_path, ignore_errors=True)
                 
-        raise Exception("Failed to generate video after all attempts")
+    raise Exception("Failed to generate video after all attempts")
+
+def setup_directories(video_id: str, debug_mode: bool) -> Tuple[Path, Path, Path]:
+    """
+    Set up necessary directories for video generation.
+    Returns tuple of (videos_dir_path, generation_dir, temp_dir_path).
+    videos_dir_path is always VIDEOS_DIR/video_id.mp4 for serving.
+    generation_dir is only set in debug mode for additional debug copy.
+    """
+    # Set up the main video path that will be used for serving
+    videos_dir_path = VIDEOS_DIR / f"{video_id}.mp4"
+    
+    # Set up debug directory if needed
+    generation_dir = None
+    if debug_mode:
+        DEBUG_DIR.mkdir(exist_ok=True)
+        generation_dir = DEBUG_DIR / video_id
+        generation_dir.mkdir(exist_ok=True)
+
+    # Create temporary directory
+    temp_dir = tempfile.mkdtemp()
+    temp_dir_path = Path(temp_dir)
+    
+    # Create media directory structure
+    media_dir = temp_dir_path / "media"
+    media_dir.mkdir(exist_ok=True)
+    audio_dir = media_dir / "audio"
+    audio_dir.mkdir(exist_ok=True)
+    
+    return videos_dir_path, generation_dir, temp_dir_path
+
+def save_debug_files(generation_dir: Path, video_id: str, json_content: str, manim_code: str, attempt: int, error: str = None):
+    """
+    Save debug files when in debug mode.
+    """
+    # Save JSON content
+    json_path = generation_dir / f"{video_id}.json"
+    with open(json_path, 'w') as f:
+        f.write(json_content)
+
+    # Save Manim code
+    if error:
+        fail_file = generation_dir / f"fail-{attempt}.py"
+        with open(fail_file, "w") as f:
+            f.write(manim_code)
+            f.write("\n\n# Error details from Manim rendering:\n")
+            f.write(f'error_message = """{error}"""')
+    else:
+        success_file = generation_dir / f"success-{attempt}.py"
+        with open(success_file, "w") as f:
+            f.write(manim_code)
+
+def render_manim_scenes(temp_dir_path: Path, manim_code: str) -> List[Path]:
+    """
+    Run Manim to render the video scenes.
+    Returns list of rendered video paths.
+    """
+    # Write Manim code
+    temp_file_path = temp_dir_path / "scene.py"
+    with open(temp_file_path, "w") as f:
+        f.write(manim_code)
+
+    # Run Manim command
+    cmd = ["manim", "-qm", "-a", str(temp_file_path)]
+    result = subprocess.run(cmd, cwd=temp_dir_path, capture_output=True, text=True)
+    result.check_returncode()
+
+    # Locate rendered videos
+    video_pattern = "media/videos/**/720p30/*.mp4"
+    rendered_videos = sorted(list(Path(temp_dir_path).glob(video_pattern)))
+    
+    if not rendered_videos:
+        raise Exception(f"Could not find any rendered videos with pattern: {video_pattern}")
+    
+    return rendered_videos
+
+def save_final_video(rendered_video: Path, videos_dir_path: Path, generation_dir: Path):
+    """
+    Save the final video to appropriate locations.
+    Always saves to videos_dir_path for serving, and optionally saves to generation_dir/video_filename in debug mode.
+    """
+    # In debug mode, also save a copy to debug directory
+    if generation_dir:
+        debug_path = generation_dir / videos_dir_path.name
+        shutil.copy2(str(rendered_video), str(debug_path))
+    
+    # Always save to videos directory for serving
+    shutil.move(str(rendered_video), str(videos_dir_path))
 
 def concatenate_scenes(
     rendered_videos: list[Path],
@@ -231,11 +249,6 @@ def concatenate_scenes(
         for video in rendered_videos:
             f.write(f"file '{video.absolute()}'\n")
     
-    print(f"=== DEBUG: Created concat file at {concat_file} ===")
-    print("=== DEBUG: Concat file contents ===")
-    with open(concat_file, "r") as f:
-        print(f.read())
-    
     # Use ffmpeg concat demuxer to concatenate the videos
     combined_video = temp_dir_path / video_filename
     concat_cmd = [
@@ -246,13 +259,9 @@ def concatenate_scenes(
         "-c", "copy",  # Stream copy without re-encoding
         str(combined_video)
     ]
-    print(f"\n=== DEBUG: Running ffmpeg concat command: {' '.join(concat_cmd)} ===")
     result = subprocess.run(concat_cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"=== ERROR: ffmpeg concat failed ===\nStdout:\n{result.stdout}\nStderr:\n{result.stderr}")
         result.check_returncode()
-    
-    # Verify the output
-    print(f"\n=== DEBUG: Verifying concatenated output ===")
     
     return combined_video
