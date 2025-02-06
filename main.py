@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, UploadFile, BackgroundTasks, Body
 from fastapi.middleware.cors import CORSMiddleware
 from uuid import uuid4
-from typing import List, Dict, Optional
+from typing import List, Dict
 from pathlib import Path
 from manim import *
 from fastapi.staticfiles import StaticFiles
@@ -114,7 +114,7 @@ async def generate_video(
             progress=0
         )
 
-        print(f"=== DEBUG: Starting system design video generation for query: {request.query} ===")
+        print(f"=== DEBUG: Starting video generation for query: {request.query} ===")
 
         background_tasks.add_task(
             process_video_job,
@@ -126,7 +126,7 @@ async def generate_video(
         return {"job_id": job_id}
         
     except Exception as e:
-        print(f"=== ERROR: Exception in generate_system_design_video: {str(e)} ===")
+        print(f"=== ERROR: Exception in generate_video: {str(e)} ===")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.api_route("/delete/videos", methods=["POST", "DELETE"])

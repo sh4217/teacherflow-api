@@ -1,7 +1,7 @@
 from openai import OpenAI
 import os
 from dotenv import load_dotenv
-from typing import List, Dict, Literal, Optional, TypedDict
+from typing import List, Dict
 import time
 from pathlib import Path
 from .constants import *
@@ -21,11 +21,6 @@ else:
 # Constants for speech generation
 MAX_RETRIES = 2
 RETRY_DELAY = 0.2  # 200ms in seconds
-
-class ChatMessage(TypedDict):
-    role: Literal['user', 'assistant', 'system', 'developer']
-    content: str
-    videoUrl: Optional[str]
     
 def parse_scenes(text: str) -> List[str]:
     """
@@ -132,7 +127,7 @@ async def generate_speech(text: str, output_path: Path) -> bool:
 
     return False
 
-def generate_system_design(user_question: str, json_data: str, previous_code: str = None, error_message: str = None, audio_files: List[AudioFile] = None) -> str:
+def generate_manim_code(user_question: str, json_data: str, previous_code: str = None, error_message: str = None, audio_files: List[AudioFile] = None) -> str:
     """
     Calls OpenAI API to generate Manim code for system design visualization, using both the question and JSON data.
     
@@ -146,7 +141,7 @@ def generate_system_design(user_question: str, json_data: str, previous_code: st
     Returns:
         str: The Manim Python code as a string
     """
-    print(f"=== DEBUG: Starting generate_system_design for question: {user_question} ===")
+    print(f"=== DEBUG: Starting generate_manim_code for question: {user_question} ===")
     
     if client is None:
         print("=== WARNING: OpenAI client not initialized. Returning empty snippet. ===")
