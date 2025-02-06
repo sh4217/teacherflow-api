@@ -2,18 +2,22 @@ SCRIPT_PROMPT = '''You are a technical expert creating a text-only script for th
         The user is a student asking for an explanation on a system design topic. 
         The system design topic is: {user_question}
 
-        Return the voiceover script for each of the two scenes within a pair of <scene></scene> tags.
+        Your response must be a structured JSON object containing a list of scenes. Each scene must have:
+        - a "name": a descriptive name for the scene (e.g., "Introduction" or "System Overview")
+        - a "script": the actual voiceover script content for that scene
 
-        The first scene of the video will display the user's question. Return one or two sentences that can be used to introduce a video on this topic.
+        Create exactly two scenes:
 
-        The second scene of the video will display a system design diagram. Your script will be read aloud to accompany the diagram.
-        The following is a JSON object that describes the system design: {json_data}
+        1. The first scene should be named "Introduction" and its script should contain one or two sentences that introduce the topic.
+        This scene will display the user's question, so keep the introduction concise and engaging.
 
-        Create a voiceover script that will give a brief introduction of these topics.
+        2. The second scene should be named "System Overview" and its script will accompany a system design diagram.
+        The following JSON object describes the system design that will be shown: {json_data}
+
+        The second scene's script will be used to create a voiceover that will give a brief introduction of these components.
         Touch on each of the components but keep it succinct.
 
-        Remember: ONLY return the content of the voiceover script within the <scene></scene> tags. Do not include *ANY* additional comments or formatting beyond that.
-        '''
+        Remember: Your response must be valid JSON that matches the SceneDesign format with exactly two scenes.'''
 
 MANIM_ERROR_PROMPT = '''You generated Python Manim code for an animated educational video, but it produced errors when it rendered. 
         Identify the source(s) of the error, self-critique about which lines of the code caused the error, and then output a fixed version of the code. 
@@ -90,6 +94,8 @@ MANIM_SCENE_PROMPT = '''You are writing Python Manim code to generate an informa
         - Include the relationship label near the arrow.
         - Make sure that all the elements are clearly visible and none of them overlap.
         - You need to include an audio voiceover file to the scene. It is located at this file path: {audio_files[1].path}. The audio duration in seconds is {audio_files[1].duration}, so make sure this scene is at least that long.
+
+        Both voiceovers are meant to start playing at the beginning of the scene.
         
         Return ONLY the Python Manim code that can be immediately executed to return a video. 
         You do not need to include any code related to rendering the video; this will be handled by another service.

@@ -66,6 +66,8 @@ async def process_video_job(
     is_pro: bool
 ):
     """Background task to process the video generation job"""
+
+    # Keeping isPro in the method signature; will be used later when o3-mini designs a full video plan.
     async def update_progress(progress: int, status: JobStatus = JobStatus.IN_PROGRESS):
         """Helper function to update job progress with sufficient sleep time"""
         jobs[job_id].status = status
@@ -77,7 +79,7 @@ async def process_video_job(
         
         # Prepare initial prerequisites (content and script)
         json_content, video_id, script_contents = await prepare_video_prerequisites(
-            user_query, is_pro, update_progress
+            user_query, update_progress
         )
         
         # Generate and render the video

@@ -5,7 +5,7 @@ from typing import List, Dict
 import time
 from pathlib import Path
 from .constants import *
-from models import AudioFile, SystemDesign, ChatMessage
+from models import AudioFile, SystemDesign, ChatMessage, SceneDesign
 
 # Load environment variables
 load_dotenv()
@@ -21,42 +21,14 @@ else:
 # Constants for speech generation
 MAX_RETRIES = 2
 RETRY_DELAY = 0.2  # 200ms in seconds
-    
-def parse_scenes(text: str) -> List[str]:
-    """
-    Parse scene content from text containing <scene> tags.
-    Returns a list of scene content strings.
-    """
-    scenes = []
-    current_pos = 0
-    
-    while True:
-        # Find start of next scene
-        start = text.find("<scene>", current_pos)
-        if start == -1:
-            break
-            
-        # Find end of this scene
-        end = text.find("</scene>", start)
-        if end == -1:
-            break
-            
-        # Extract scene content (excluding tags)
-        scene_content = text[start + 7:end].strip()
-        scenes.append(scene_content)
-        
-        current_pos = end + 8
-    
-    return scenes
 
-def generate_text(messages: List[ChatMessage], is_pro: bool = False) -> Dict[str, List[str]]:
+def generate_text(messages: List[ChatMessage]) -> Dict[str, List[str]]:
     """
-    Generate text response using OpenAI's chat completion API.
-    Parses the response into individual scene content.
+    Generate text response using OpenAI's chat completion API with structured output.
+    Returns a dictionary containing the list of scene content strings.
     
     Args:
         messages (List[ChatMessage]): List of chat messages
-        is_pro (bool): Whether the user has a pro subscription
         
     Returns:
         Dict containing the list of scene content strings
@@ -64,25 +36,18 @@ def generate_text(messages: List[ChatMessage], is_pro: bool = False) -> Dict[str
     if client is None:
         raise Exception("OpenAI client not initialized")
 
-    # Construct API messages based on user type
-    if is_pro:
-        api_messages = [{"role": "developer", "content": SCRIPT_PROMPT}, *messages]
-    else:
-        api_messages = [{"role": "user", "content": SCRIPT_PROMPT}, *messages]
+    api_messages = [{"role": "system", "content": SCRIPT_PROMPT}, *messages]
 
     try:
-        response = client.chat.completions.create(
-            model=O3_MINI if is_pro else O1_MINI,
+        completion = client.beta.chat.completions.parse(
+            model=GPT_4O,
             messages=api_messages,
-            temperature=1
+            response_format=SceneDesign,
+            temperature=0
         )
 
-        completion = response.choices[0].message.content
-        scenes = parse_scenes(completion)
-        
-        if not scenes:
-            # If no scenes found, treat entire response as one scene
-            scenes = [completion.strip()]
+        scene_design = completion.choices[0].message.parsed
+        scenes = [scene.script for scene in scene_design.scenes]
             
         return {"message": {"role": "assistant", "content": scenes}}
     
@@ -183,7 +148,7 @@ def generate_manim_code(user_question: str, json_data: str, previous_code: str =
         print(f"=== ERROR: Exception when calling OpenAI API: {e} ===")
         return ""
 
-def generate_concepts(messages: List[ChatMessage], is_pro: bool = False) -> Dict[str, ChatMessage]:
+def generate_concepts(messages: List[ChatMessage]) -> Dict[str, ChatMessage]:
     """
     Generate a system design breakdown using OpenAI's chat completion API with structured output.
     The response will consist of two top-level lists: "components" and "relationships". Each component

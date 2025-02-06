@@ -40,6 +40,13 @@ class JobMetadata(BaseModel):
     progress: float = 0.0
     videoUrl: Optional[str] = None
 
+class Scene(BaseModel):
+    name: str
+    script: str
+
+class SceneDesign(BaseModel):
+    scenes: List[Scene]
+
 class TextRequest(BaseModel):
     query: str
     is_pro: Optional[bool] = False
