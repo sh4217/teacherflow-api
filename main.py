@@ -1,15 +1,18 @@
-from fastapi import FastAPI, HTTPException, UploadFile, BackgroundTasks, Body
+from fastapi import FastAPI, HTTPException, UploadFile, BackgroundTasks, Body, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from uuid import uuid4
 from typing import List, Dict
 from pathlib import Path
 from manim import *
-from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import asyncio
-from videos.video_utils import (
+from videos.generation.generation_utils import (
     prepare_video_prerequisites,
     generate_and_render_video
+)
+from videos.streaming.streaming_utils import (
+    get_video_file_response,
+    read_video_chunk
 )
 from models import JobStatus, JobMetadata, ConceptRequest
 
@@ -27,14 +30,44 @@ app.add_middleware(
     allow_origins=["http://localhost:3000", "https://teacherflow.ai", "https://www.teacherflow.ai"],
     allow_credentials=True,
     allow_methods=["POST", "GET", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "Range"],
 )
 
 # Constants
 VIDEOS_DIR = Path("videos")
 VIDEOS_DIR.mkdir(exist_ok=True)
 
-app.mount("/videos", StaticFiles(directory="videos"), name="videos")
+# Remove StaticFiles mount and add streaming endpoint
+@app.get("/videos/{video_filename}")
+async def stream_video(video_filename: str, request: Request):
+    """Stream video with support for range requests"""
+    video_path = VIDEOS_DIR / video_filename
+    
+    range_header = request.headers.get("range")
+    response_data = get_video_file_response(video_path, range_header)
+    
+    # Prepare headers
+    headers = {
+        "accept-ranges": response_data.accept_ranges,
+        "content-type": response_data.content_type,
+        "content-length": str(response_data.content_length)
+    }
+    
+    if response_data.content_range:
+        headers["content-range"] = response_data.content_range
+        
+        # Parse start and chunk size from content range
+        start = int(response_data.content_range.split(" ")[1].split("-")[0])
+        chunk_size = response_data.content_length
+        content = read_video_chunk(video_path, start, chunk_size)
+    else:
+        content = read_video_chunk(video_path)
+    
+    return Response(
+        content=content,
+        status_code=response_data.status_code,
+        headers=headers
+    )
 
 @app.get("/health")
 async def health_check():
