@@ -44,37 +44,6 @@ SYSTEM_DESIGN_PROMPT = '''You are an expert in system design. Your task is to an
 
 The system design topic is: {user_question}'''
 
-# MANIM_SCENE_PROMPT = '''You are writing Python Manim code to generate an informative video on a system design topic. 
-#         The topic is: {user_question}
-
-#         You are provided with the following JSON object containing the system design details: {json_data}
-
-#         This JSON includes two lists:
-#         - "components": Each component has an "id", "name", and "description".  
-#         - "relationships": Each relationship has a "source", "target", "label", and "direction" (either "forward" for a one-way connection or "bidirectional" for a two-way connection).
-
-#         - For every scene you create, prefix the name with Scene_01_, Scene_02_, etc.
-#         Your task is to create the Manim Scenes that will form the video. The first scene is a simple introduction scene: display the topic.
-        
-#         The second scene is a visual representation of the entire system design. For each component, draw a box that displays the component's name (do not include the description at this stage). Then, connect the boxes with arrows according to the relationships defined in the JSON:
-#         - Include the relationship label near the arrow.
-#         - Make sure that all the elements are clearly visible and none of them overlap.
-#         - An audio voiceover will be added to this scene manually. The audio duration in seconds is {audio_duration}, so make sure this scene is at least that long.
-
-#         Then, for the rest of the video, create a new scene for each component:
-#         - For each component scene, display the component's box prominently in the center
-#         - Show the component's name and full description
-#         - Highlight any relationships this component has with other components
-#         - Animate the transitions between elements smoothly
-#         - Ensure each component scene provides clear visual context of where it fits in the overall system
-        
-#         Return ONLY the Python Manim code that can be immediately executed to return a video. 
-#         You do not need to include any code related to rendering the video; this will be handled by another service.
-#         Do not output any other text besides this code.
-#         Do not wrap the code output in ```python or ```.'''
-
-# Keeping it to two scenes for now. Will add the per-component scenes back in later.
-
 MANIM_SCENE_PROMPT = '''You are writing Python Manim code to generate an informative video on a system design topic. 
         The topic is: {user_question}
 
