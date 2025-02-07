@@ -53,7 +53,15 @@ class TextRequest(BaseModel):
 
 class ConceptRequest(BaseModel):
     query: str
-    is_pro: Optional[bool] = False
+    is_pro: bool = False
 
 class ManimRequest(BaseModel):
     query: str
+
+class VideoStreamResponse(BaseModel):
+    """Model for video streaming response metadata"""
+    content_type: str
+    content_length: int
+    content_range: Optional[str] = None
+    accept_ranges: str = "bytes"
+    status_code: int = 200
