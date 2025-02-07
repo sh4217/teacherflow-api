@@ -26,17 +26,24 @@ def get_video_file_response(video_path: Path, range_header: Optional[str] = None
             status_code=200
         )
     
-    start_str = range_header.replace("bytes=", "").split("-")[0]
-    start = int(start_str) if start_str else 0
-    end = file_size - 1
-    chunk_size = end - start + 1
-    
-    return VideoStreamResponse(
-        content_type="video/mp4",
-        content_length=chunk_size,
-        content_range=f"bytes {start}-{end}/{file_size}",
-        status_code=206
-    )
+    try:
+        ranges = range_header.replace("bytes=", "").split("-")
+        start = int(ranges[0]) if ranges[0] else 0
+        end = int(ranges[1]) if len(ranges) > 1 and ranges[1] else file_size - 1
+        
+        if start >= file_size or start < 0 or end >= file_size or start > end:
+            raise ValueError("Invalid range")
+            
+        chunk_size = end - start + 1
+        
+        return VideoStreamResponse(
+            content_type="video/mp4",
+            content_length=chunk_size,
+            content_range=f"bytes {start}-{end}/{file_size}",
+            status_code=206
+        )
+    except (ValueError, IndexError):
+        raise HTTPException(status_code=416, detail="Invalid range header")
 
 def read_video_chunk(video_path: Path, start: int = 0, chunk_size: Optional[int] = None) -> bytes:
     """
@@ -53,6 +60,9 @@ def read_video_chunk(video_path: Path, start: int = 0, chunk_size: Optional[int]
     if chunk_size is None:
         return video_path.read_bytes()
         
-    with open(video_path, "rb") as video:
-        video.seek(start)
-        return video.read(chunk_size) 
+    try:
+        with open(video_path, "rb") as video:
+            video.seek(start)
+            return video.read(chunk_size)
+    except (IOError, OSError) as e:
+        raise HTTPException(status_code=500, detail="Error reading video file") from e

@@ -226,8 +226,10 @@ def concatenate_scenes(
         str(combined_video)
     ]
     result = subprocess.run(concat_cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        print(f"=== ERROR: ffmpeg concat failed ===\nStdout:\n{result.stdout}\nStderr:\n{result.stderr}")
+    try:
         result.check_returncode()
+    except subprocess.CalledProcessError:
+        print(f"=== ERROR: ffmpeg concat failed ===\nStdout:\n{result.stdout}\nStderr:\n{result.stderr}")
+        raise
     
-    return combined_video 
+    return combined_video
