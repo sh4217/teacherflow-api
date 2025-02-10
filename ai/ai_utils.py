@@ -7,10 +7,8 @@ from pathlib import Path
 from .constants import *
 from models import AudioFile, SystemDesign, ChatMessage, SceneDesign
 
-# Load environment variables
 load_dotenv()
 
-# Initialize OpenAI client at module level
 openai_api_key = os.getenv("OPENAI_API_KEY")
 if not openai_api_key:
     print("=== WARNING: No OPENAI_API_KEY found in environment variables ===")
@@ -18,9 +16,8 @@ if not openai_api_key:
 else:
     client = OpenAI(api_key=openai_api_key)
 
-# Constants for speech generation
 MAX_RETRIES = 2
-RETRY_DELAY = 0.2  # 200ms in seconds
+RETRY_DELAY = 0.2
 
 def generate_text(messages: List[ChatMessage]) -> Dict[str, List[str]]:
     """
@@ -121,7 +118,6 @@ def generate_manim_code(user_question: str, json_data: str, previous_code: str =
         )
     else:
         print("=== DEBUG: Generating initial system design prompt ===")
-        # Include both the question and JSON data in the prompt
         prompt_text = MANIM_SCENE_PROMPT.format(
             user_question=user_question,
             json_data=json_data,
@@ -168,16 +164,12 @@ def generate_concepts(messages: List[ChatMessage]) -> Dict[str, ChatMessage]:
     if client is None:
         raise Exception("OpenAI client not initialized")
 
-    # Format the system prompt with the user's question
     formatted_prompt = SYSTEM_DESIGN_PROMPT.format(user_question=messages[0]['content'])
     
-    # Construct API messages with the formatted prompt
     api_messages = [{"role": "developer", "content": formatted_prompt}, *messages]
 
     try:
         print("=== DEBUG: Calling OpenAI API for structured system design ===")
-        # Call the beta API method that supports structured output.
-        # The response_format parameter is set to the SystemDesign class, which defines the expected output.
         completion = client.beta.chat.completions.parse(
             model=GPT_4O,
             messages=api_messages,
@@ -185,11 +177,7 @@ def generate_concepts(messages: List[ChatMessage]) -> Dict[str, ChatMessage]:
             temperature=0
         )
 
-        # Retrieve the parsed SystemDesign response.
         system_design = completion.choices[0].message.parsed
-        print(f"=== DEBUG: Received structured response with {len(system_design.components)} components and {len(system_design.relationships)} relationships ===")
-
-        # Return the JSON-formatted system design response.
         json_response = system_design.model_dump_json(indent=2)
         
         return {"message": {"role": "assistant", "content": json_response}}
