@@ -76,9 +76,14 @@ async def health_check():
 @app.get("/job-status/{job_id}")
 async def get_job_status(job_id: str):
     """Endpoint to get job status"""
+    print(f"=== DEBUG: Checking status for job {job_id} ===")
     if job_id not in jobs:
+        print(f"=== ERROR: Job {job_id} not found in jobs dictionary ===")
+        print(f"=== DEBUG: Current jobs: {list(jobs.keys())} ===")
         raise HTTPException(status_code=404, detail="Job not found")
-    return jobs[job_id]
+    job_status = jobs[job_id]
+    print(f"=== DEBUG: Returning status for job {job_id}: {job_status} ===")
+    return job_status
 
 async def validate_request(texts: List[str], audio_files: List[UploadFile]):
     """Validate the incoming request data"""
@@ -111,29 +116,34 @@ async def process_video_job(
         print(f"=== DEBUG: Starting system design video job {job_id} ===")
         
         # Prepare initial prerequisites (content and script)
-        json_content, video_id, script_contents = await prepare_video_prerequisites(
+        video_plan = await prepare_video_prerequisites(
             user_query, update_progress
         )
         
         # Generate and render the video
         video_filename = await generate_and_render_video(
             user_query, 
-            json_content, 
-            video_id, 
-            script_contents,
+            video_plan,
             update_progress
         )
         
         # Update job status
+        print(f"=== DEBUG: Video generation complete, updating job status for {job_id} ===")
         jobs[job_id].status = JobStatus.COMPLETED
         jobs[job_id].progress = 100
         jobs[job_id].videoUrl = video_filename
+        print(f"=== DEBUG: Job {job_id} completed successfully with video: {video_filename} ===")
         
     except Exception as e:
         print(f"=== ERROR: Exception in system design video job {job_id}: {str(e)} ===")
-        jobs[job_id].status = JobStatus.FAILED
-        jobs[job_id].progress = 0
+        if job_id in jobs:  # Check if job still exists
+            jobs[job_id].status = JobStatus.FAILED
+            jobs[job_id].progress = 0
         raise
+    finally:
+        print(f"=== DEBUG: Video generation process complete for job {job_id} ===")
+        # Add a small delay to ensure the job status is updated before any potential cleanup
+        await asyncio.sleep(1)
 
 @app.post("/generate-video")
 async def generate_video(
@@ -143,6 +153,7 @@ async def generate_video(
     """Start a video generation job, immediately return a job ID so the frontend can poll for status"""
     try:
         job_id = str(uuid4())
+        print(f"=== DEBUG: Creating new video generation job {job_id} ===")
         jobs[job_id] = JobMetadata(
             job_id=job_id,
             status=JobStatus.PENDING,

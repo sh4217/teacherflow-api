@@ -9,7 +9,8 @@ from dotenv import load_dotenv
 from fastapi import HTTPException
 
 from audio.audio_utils import generate_audio
-from ai.ai_utils import generate_concepts, generate_manim_code, generate_text
+from ai.ai_utils import generate_video_plan, generate_manim_scenes, generate_manim_scene_with_error
+from models import VideoPlan
 
 # Load environment variables
 load_dotenv()
@@ -25,105 +26,161 @@ DEBUG_DIR = Path("debug")
 async def prepare_video_prerequisites(
     user_query: str,
     update_progress: callable
-) -> Tuple[str, str, List[str]]:
+) -> VideoPlan:
     """
     Prepare initial prerequisites for video generation including content and script.
-    Returns tuple of (json_content, video_id, script_contents)
+    Returns VideoPlan object (without audio information at this stage).
     """
-    video_id = str(uuid4())
-    
-    print("=== DEBUG: Step 1 - Generating system design JSON ===")
+    print("=== DEBUG: Step 1 - Generating video plan ===")
     await update_progress(10)
     messages = [{"role": "user", "content": user_query}]
-    concept_response = generate_concepts(messages)
-    json_content = concept_response["message"]["content"]
+    video_plan_response = generate_video_plan(messages)
+    json_content = video_plan_response["message"]["content"]
     
-    print("=== DEBUG: Step 2 - Generating voiceover script ===")
+    print("=== DEBUG: Step 2 - Parsing video plan ===")
     await update_progress(20)
-    script_response = generate_text(messages)
-    script_contents = script_response["message"]["content"]
+    video_plan = VideoPlan.model_validate_json(json_content)
     
     await update_progress(30)
-    
-    return json_content, video_id, script_contents
+    return video_plan
 
 async def generate_and_render_video(
     user_query: str,
-    json_content: str,
-    video_id: str,
-    script_contents: List[str],
+    video_plan: VideoPlan,
     update_progress: callable
 ) -> str:
     """
     Generate and render the video using Manim.
     Returns the filename of the generated video.
     """
+    video_id = str(uuid4())
     video_filename = f"{video_id}.mp4"
     max_retries = 2
-    attempt = 0
-    last_error = None
-    last_code = None
     
     videos_dir_path, generation_dir, temp_dir_path = setup_directories(video_id, DEBUG_MODE)
     
     try:
         if DEBUG_MODE:
+            json_content = video_plan.model_dump_json(indent=2)
             save_debug_files(generation_dir, video_id, json_content, "", 0)
         
         print("=== DEBUG: Step 3 - Generating audio from script ===")
         await update_progress(40)
         audio_dir = temp_dir_path / "media" / "audio"
+        script_contents = [scene.script for scene in video_plan.plan]
         audio_files = await generate_audio(audio_dir, script_contents)
         await update_progress(60)
         
-        while attempt <= max_retries:
-            try:
-                print(f"=== DEBUG: Attempt {attempt + 1}/{max_retries + 1} to generate and render video ===")
-                
-                manim_code = generate_manim_code(
-                    user_query, 
-                    json_content, 
-                    previous_code=last_code, 
-                    error_message=last_error,
-                    audio_files=audio_files
-                )
-                if not manim_code:
-                    raise HTTPException(status_code=500, detail="Failed to generate system design Manim code")
-                
-                await update_progress(80)
-                
-                rendered_videos = render_manim_scenes(temp_dir_path, manim_code)
-                await update_progress(90)
-                
-                rendered_video = concatenate_scenes(rendered_videos, temp_dir_path, video_filename)
-                
-                save_final_video(rendered_video, videos_dir_path, generation_dir)
-                
-                if DEBUG_MODE:
-                    save_debug_files(generation_dir, video_id, json_content, manim_code, attempt + 1)
-                
-                await update_progress(100)
-                return video_filename
+        # Update audio information in the video plan
+        for scene, audio_file in zip(video_plan.plan, audio_files):
+            scene.audio_path = audio_file.path
+            scene.audio_duration = audio_file.duration
+        
+        print("=== DEBUG: Step 4 - Generating Manim scenes ===")
+        video_code = generate_manim_scenes(video_plan)
+        if not video_code or not video_code.scenes:
+            raise HTTPException(status_code=500, detail="Failed to generate Manim scenes")
+        
+        rendered_videos = []
+        for i, scene in enumerate(video_code.scenes):
+            scene_attempt = 0
+            current_code = scene.code
+            
+            while scene_attempt <= max_retries:
+                try:
+                    print(f"=== DEBUG: Rendering scene {i + 1}/{len(video_code.scenes)} (attempt {scene_attempt + 1}) ===")
                     
-            except subprocess.CalledProcessError as e:
-                print(f"=== ERROR: Manim rendering failed on attempt {attempt + 1} ===")
-                print(f"=== Command output (stdout) ===\n{e.stdout}")
-                print(f"=== Command output (stderr) ===\n{e.stderr}")
+                    # Write current scene code to file
+                    scene_file = temp_dir_path / f"scene_{i + 1}.py"
+                    with open(scene_file, "w") as f:
+                        f.write(current_code)
+                    
+                    # Render individual scene with proper resource cleanup
+                    cmd = ["manim", "-qm", "-a", str(scene_file)]
+                    try:
+                        # Use a separate process group to prevent affecting the main server
+                        process = subprocess.Popen(
+                            cmd,
+                            cwd=temp_dir_path,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True,
+                            start_new_session=True  # This prevents the subprocess from sharing signal handlers
+                        )
+                        stdout, stderr = process.communicate()
+                        if process.returncode != 0:
+                            raise subprocess.CalledProcessError(process.returncode, cmd, stdout, stderr)
+                    except subprocess.CalledProcessError as e:
+                        print(f"=== ERROR: Scene {i + 1} rendering failed on attempt {scene_attempt + 1} ===")
+                        print(f"=== Command output (stdout) ===\n{e.stdout}")
+                        print(f"=== Command output (stderr) ===\n{e.stderr}")
+                        
+                        if DEBUG_MODE:
+                            save_debug_files(generation_dir, video_id, json_content, current_code, scene_attempt + 1, e.stderr)
+                        
+                        if scene_attempt == max_retries:
+                            raise
+                        
+                        # Try to fix just this scene
+                        current_code = generate_manim_scene_with_error(current_code, e.stderr)
+                        if not current_code:
+                            raise HTTPException(status_code=500, detail=f"Failed to fix scene {i + 1} after error")
+                        
+                        scene_attempt += 1
+                        continue
+                    
+                    # Find rendered video for this scene
+                    scene_dir = temp_dir_path / "media" / "videos" / f"scene_{i + 1}" / "720p30"
+                    print(f"=== DEBUG: Contents of {scene_dir}: ===")
+                    if scene_dir.exists():
+                        print(f"=== DEBUG: Contents of {scene_dir}: ===")
+                        for file in sorted(scene_dir.glob("Scene_*.mp4")):
+                            print(f"Found video: {file.name}")
+                    else:
+                        print(f"=== DEBUG: Scene directory does not exist: {scene_dir} ===")
+                    
+                    # Match any scene number, but sort them to get in correct order
+                    scene_videos = sorted(list(scene_dir.glob("Scene_*.mp4")))
+                    print(f"=== DEBUG: Found {len(scene_videos)} matching videos for scene {i + 1} ===")
+                    if scene_videos:
+                        print(f"=== DEBUG: Matched videos: {[v.name for v in scene_videos]} ===")
+                    
+                    if not scene_videos:
+                        print(f"=== ERROR: No video file found for scene {i + 1} after successful render ===")
+                        if scene_attempt == max_retries:
+                            raise HTTPException(status_code=500, detail=f"Scene {i + 1} rendered without errors but no video file was created")
+                        scene_attempt += 1
+                        continue
+                    
+                    # Add all videos in correct order
+                    rendered_videos.extend(scene_videos)
+                    print(f"=== DEBUG: Added {len(scene_videos)} videos to rendered_videos (total: {len(rendered_videos)}) ===")
+                    
+                    if DEBUG_MODE:
+                        save_debug_files(generation_dir, video_id, json_content, current_code, scene_attempt + 1)
+                    
+                    break  # Success, move to next scene
+                    
+                except Exception as e:
+                    print(f"=== ERROR: Unexpected error rendering scene {i + 1}: {str(e)} ===")
+                    if scene_attempt == max_retries:
+                        raise
+                    scene_attempt += 1
+                    continue
+            
+            # Update progress as each scene is rendered
+            progress = 60 + (30 * (i + 1) // len(video_code.scenes))
+            await update_progress(progress)
+        
+        # Concatenate all rendered scenes
+        rendered_video = concatenate_scenes(rendered_videos, temp_dir_path, video_filename)
+        save_final_video(rendered_video, videos_dir_path, generation_dir)
+        
+        await update_progress(100)
+        return video_filename
                 
-                if DEBUG_MODE:
-                    save_debug_files(generation_dir, video_id, json_content, manim_code, attempt + 1, e.stderr)
-                
-                if attempt == max_retries:
-                    raise
-                
-                last_error = e.stderr
-                last_code = manim_code
-                attempt += 1
-                continue
     finally:
         shutil.rmtree(temp_dir_path, ignore_errors=True)
-                
-    raise Exception("Failed to generate video after all attempts")
 
 def setup_directories(video_id: str, debug_mode: bool) -> Tuple[Path, Path, Path]:
     """
@@ -211,10 +268,17 @@ def concatenate_scenes(
     If multiple videos exist, they will be concatenated using ffmpeg.
     If only one video exists, it will be renamed to the desired filename.
     """
+    print(f"=== DEBUG: Concatenating {len(rendered_videos)} videos ===")
+    for i, video in enumerate(rendered_videos):
+        print(f"Video {i + 1}: {video.name}")
+    
     concat_file = temp_dir_path / "concat.txt"
+    print(f"=== DEBUG: Writing concat file to: {concat_file} ===")
     with open(concat_file, "w") as f:
         for video in rendered_videos:
-            f.write(f"file '{video.absolute()}'\n")
+            line = f"file '{video.absolute()}'"
+            print(f"=== DEBUG: Adding to concat file: {line} ===")
+            f.write(f"{line}\n")
     
     combined_video = temp_dir_path / video_filename
     concat_cmd = [
@@ -225,11 +289,24 @@ def concatenate_scenes(
         "-c", "copy",
         str(combined_video)
     ]
-    result = subprocess.run(concat_cmd, capture_output=True, text=True)
+    print(f"=== DEBUG: Running ffmpeg command: {' '.join(concat_cmd)} ===")
+    
     try:
-        result.check_returncode()
-    except subprocess.CalledProcessError:
-        print(f"=== ERROR: ffmpeg concat failed ===\nStdout:\n{result.stdout}\nStderr:\n{result.stderr}")
+        # Use a separate process group to prevent affecting the main server
+        process = subprocess.Popen(
+            concat_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True  # This prevents the subprocess from sharing signal handlers
+        )
+        stdout, stderr = process.communicate()
+        if process.returncode != 0:
+            print(f"=== ERROR: ffmpeg concat failed ===\nStdout:\n{stdout}\nStderr:\n{stderr}")
+            raise subprocess.CalledProcessError(process.returncode, concat_cmd, stdout, stderr)
+        print(f"=== DEBUG: Successfully created combined video: {combined_video} ===")
+    except subprocess.CalledProcessError as e:
+        print(f"=== ERROR: ffmpeg concat failed ===\nStdout:\n{e.stdout}\nStderr:\n{e.stderr}")
         raise
     
     return combined_video

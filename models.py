@@ -65,3 +65,26 @@ class VideoStreamResponse(BaseModel):
     content_range: Optional[str] = None
     accept_ranges: str = "bytes"
     status_code: int = 200
+
+class FullScene(BaseModel):
+    """A full scene for a Manim video"""
+    synopsis: str         # Description of what the scene will cover
+    concepts: List[str]   # Key concepts to include in the scene
+    script: str           # Script for the voice-over audio that will be added to the scene
+    visuals: str          # Description of the visuals for the scene that will eventually be written in Manim code
+    audio_path: Optional[str] = None        # Path to the audio file for this scene
+    audio_duration: Optional[float] = None  # Duration of the audio file in seconds
+
+class VideoPlan(BaseModel):
+    """Components for generating an educational Manim video"""
+    synopsis: str           # Description of what the video will cover
+    concepts: List[str]     # Key concepts to include in the video
+    plan: List[FullScene]   # List of plans for each scene in the video
+
+class ManimScene(BaseModel):
+    """Python Manim code for an individual scene"""
+    code: str
+
+class VideoCode(BaseModel):
+    """The Manim code for a video"""
+    scenes: List[ManimScene]
