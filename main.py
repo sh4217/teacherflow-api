@@ -14,7 +14,7 @@ from videos.streaming.streaming_utils import (
     get_video_file_response,
     read_video_chunk
 )
-from models import JobStatus, JobMetadata, ConceptRequest
+from models import JobStatus, JobMetadata, VideoRequest
 
 # In-memory job store
 jobs: Dict[str, JobMetadata] = {}
@@ -122,7 +122,6 @@ async def process_video_job(
         
         # Generate and render the video
         video_filename = await generate_and_render_video(
-            user_query, 
             video_plan,
             update_progress
         )
@@ -148,7 +147,7 @@ async def process_video_job(
 @app.post("/generate-video")
 async def generate_video(
     background_tasks: BackgroundTasks,
-    request: ConceptRequest
+    request: VideoRequest
 ):
     """Start a video generation job, immediately return a job ID so the frontend can poll for status"""
     try:

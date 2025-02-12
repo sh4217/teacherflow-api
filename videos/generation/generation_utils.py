@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from fastapi import HTTPException
 
 from audio.audio_utils import generate_audio
-from ai.ai_utils import generate_video_plan, generate_manim_scenes, generate_manim_scene_with_error
+from ai.ai_utils import generate_video_plan, generate_manim_scenes, retry_manim_scene_generation
 from models import VideoPlan
 
 # Load environment variables
@@ -45,7 +45,6 @@ async def prepare_video_prerequisites(
     return video_plan
 
 async def generate_and_render_video(
-    user_query: str,
     video_plan: VideoPlan,
     update_progress: callable
 ) -> str:
@@ -62,7 +61,10 @@ async def generate_and_render_video(
     try:
         if DEBUG_MODE:
             json_content = video_plan.model_dump_json(indent=2)
-            save_debug_files(generation_dir, video_id, json_content, "", 0)
+            # Save just the JSON file for debugging
+            json_path = generation_dir / f"{video_id}.json"
+            with open(json_path, 'w') as f:
+                f.write(json_content)
         
         print("=== DEBUG: Step 3 - Generating audio from script ===")
         await update_progress(40)
@@ -109,23 +111,24 @@ async def generate_and_render_video(
                         )
                         stdout, stderr = process.communicate()
                         if process.returncode != 0:
+                            error_msg = f"Command output (stdout):\n{stdout}\nCommand output (stderr):\n{stderr}"
+                            print(f"=== ERROR: Scene {i + 1} rendering failed on attempt {scene_attempt + 1} ===")
+                            print(error_msg)
+                            
+                            if DEBUG_MODE:
+                                save_debug_files(generation_dir, video_id, json_content, scene.code, i + 1, scene_attempt + 1, error_msg)
+                            
                             raise subprocess.CalledProcessError(process.returncode, cmd, stdout, stderr)
                     except subprocess.CalledProcessError as e:
-                        print(f"=== ERROR: Scene {i + 1} rendering failed on attempt {scene_attempt + 1} ===")
-                        print(f"=== Command output (stdout) ===\n{e.stdout}")
-                        print(f"=== Command output (stderr) ===\n{e.stderr}")
-                        
-                        if DEBUG_MODE:
-                            save_debug_files(generation_dir, video_id, json_content, current_code, scene_attempt + 1, e.stderr)
-                        
                         if scene_attempt == max_retries:
                             raise
                         
                         # Try to fix just this scene
-                        current_code = generate_manim_scene_with_error(current_code, e.stderr)
-                        if not current_code:
+                        scene.code = retry_manim_scene_generation(scene.code, e.stderr)
+                        if not scene.code:
                             raise HTTPException(status_code=500, detail=f"Failed to fix scene {i + 1} after error")
                         
+                        current_code = scene.code  # Update current_code to match the retried scene code
                         scene_attempt += 1
                         continue
                     
@@ -157,7 +160,7 @@ async def generate_and_render_video(
                     print(f"=== DEBUG: Added {len(scene_videos)} videos to rendered_videos (total: {len(rendered_videos)}) ===")
                     
                     if DEBUG_MODE:
-                        save_debug_files(generation_dir, video_id, json_content, current_code, scene_attempt + 1)
+                        save_debug_files(generation_dir, video_id, json_content, scene.code, i + 1, scene_attempt + 1)
                     
                     break  # Success, move to next scene
                     
@@ -207,7 +210,7 @@ def setup_directories(video_id: str, debug_mode: bool) -> Tuple[Path, Path, Path
     
     return videos_dir_path, generation_dir, temp_dir_path
 
-def save_debug_files(generation_dir: Path, video_id: str, json_content: str, manim_code: str, attempt: int, error: str = None):
+def save_debug_files(generation_dir: Path, video_id: str, json_content: str, manim_code: str, scene_num: int, attempt: int, error: str = None):
     """
     Save debug files when in debug mode.
     """
@@ -216,13 +219,13 @@ def save_debug_files(generation_dir: Path, video_id: str, json_content: str, man
         f.write(json_content)
 
     if error:
-        fail_file = generation_dir / f"fail-{attempt}.py"
+        fail_file = generation_dir / f"fail-{scene_num}-{attempt}.py"
         with open(fail_file, "w") as f:
             f.write(manim_code)
             f.write("\n\n# Error details from Manim rendering:\n")
             f.write(f'error_message = """{error}"""')
     else:
-        success_file = generation_dir / f"success-{attempt}.py"
+        success_file = generation_dir / f"success-{scene_num}-{attempt}.py"
         with open(success_file, "w") as f:
             f.write(manim_code)
 
