@@ -134,19 +134,9 @@ async def generate_and_render_video(
                     
                     # Find rendered video for this scene
                     scene_dir = temp_dir_path / "media" / "videos" / f"scene_{i + 1}" / "720p30"
-                    print(f"=== DEBUG: Contents of {scene_dir}: ===")
-                    if scene_dir.exists():
-                        print(f"=== DEBUG: Contents of {scene_dir}: ===")
-                        for file in sorted(scene_dir.glob("Scene_*.mp4")):
-                            print(f"Found video: {file.name}")
-                    else:
-                        print(f"=== DEBUG: Scene directory does not exist: {scene_dir} ===")
-                    
+
                     # Match any scene number, but sort them to get in correct order
                     scene_videos = sorted(list(scene_dir.glob("Scene_*.mp4")))
-                    print(f"=== DEBUG: Found {len(scene_videos)} matching videos for scene {i + 1} ===")
-                    if scene_videos:
-                        print(f"=== DEBUG: Matched videos: {[v.name for v in scene_videos]} ===")
                     
                     if not scene_videos:
                         print(f"=== ERROR: No video file found for scene {i + 1} after successful render ===")

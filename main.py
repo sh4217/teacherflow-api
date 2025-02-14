@@ -113,7 +113,7 @@ async def process_video_job(
         await asyncio.sleep(0.5)
     
     try:
-        print(f"=== DEBUG: Starting system design video job {job_id} ===")
+        print(f"=== DEBUG: Starting video generation job {job_id} ===")
         
         # Prepare initial prerequisites (content and script)
         video_plan = await prepare_video_prerequisites(
@@ -134,7 +134,7 @@ async def process_video_job(
         print(f"=== DEBUG: Job {job_id} completed successfully with video: {video_filename} ===")
         
     except Exception as e:
-        print(f"=== ERROR: Exception in system design video job {job_id}: {str(e)} ===")
+        print(f"=== ERROR: Exception in video generation job {job_id}: {str(e)} ===")
         if job_id in jobs:  # Check if job still exists
             jobs[job_id].status = JobStatus.FAILED
             jobs[job_id].progress = 0

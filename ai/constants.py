@@ -19,7 +19,9 @@ VIDEO_PLAN_PROMPT = '''You are an expert educational content creator specializin
         - synopsis: A 1-2 sentence description of what this specific scene will cover
         - concepts: A list of 2-3 key concepts that this scene focuses on
         - script: The natural, conversational voiceover script for this scene
-        - visuals: A clear description of what should appear on screen, focusing on simple but effective visuals. This can include well-structured text, basic shapes and diagrams, or other minimalist elements. Each visual description should specify what appears when, how it moves or changes, and how it relates to the script timing
+        - visuals: A clear description of what should appear on screen, focusing on simple but effective visuals.
+                * Use text and relationship-based visuals, like text blocks, boxes, arrows, diagrams, tables, etc.
+                * Do not attempt to build graphics out of geometric shapes.
 
         Guidelines for creating effective educational content:
         - Start with an engaging introduction that hooks the viewer
@@ -29,7 +31,6 @@ VIDEO_PLAN_PROMPT = '''You are an expert educational content creator specializin
         - Write scripts in a conversational tone
         - Ensure visual descriptions are specific enough for Manim implementation, including:
         * Clear, minimalist visual elements
-        * Effective use of text and basic shapes
         * Simple animations and transitions
         * Clean layout and spacing'''
 
@@ -43,29 +44,14 @@ MANIM_CODE_PROMPT = '''You are an expert in creating educational animations usin
         - Make sure to include the audio file for each scene in the beginning of the code.
                 * Its path location is set as audio_path for each scene.
                 * Make sure the scene lasts at least as long as audio_duration in seconds.
-        - Follow these timing principles:
-                * Make animations last long enough to be readable
-                * Sync animation timing with the script
-                * Include appropriate pauses between elements
-                * Add wait() calls after significant animations
-        - Keep visuals clean and minimal:
-                * You do not have any image files to use. Any graphics you incorporate must be created using Manim's built-in functions.
-                * Use simple shapes and text
-                * Maintain consistent styling
-                * Ensure text is readable (appropriate size and color)
-                * Position elements with clear spacing
-        - For text-based visuals:
-                * Use Text() for regular text   
-                * Group related text elements
-                * Animate text appearance smoothly
-        - For transitions:
-                * Use simple animations like Write, FadeIn, Transform
-                * Maintain visual continuity between elements
-                * Add smooth movement paths
+        - Visuals should be simple and minimalistic.
+                * Use text and relationship-based visuals, like text blocks, boxes, arrows, diagrams, tables, etc.
+                * Do not attempt to build graphics out of geometric shapes.
+                * Make sure to arrange visuals so they are evenly-spaced and not overlapping.
+        - DO NOT INCLUDE any image files, like .png, .jpg, .ico, .svg, etc. -- you do not have access to image files and any attempt to include them are hallucinations.
 
-        Include these standard Manim imports:
+        Include the standard Manim import:
         from manim import *
-        import numpy as np
 
         The input VideoPlan is: {videoPlan}'''
 
