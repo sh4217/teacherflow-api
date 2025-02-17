@@ -1,5 +1,6 @@
 MANIM_ERROR_PROMPT = '''You generated Python Manim code for an animated educational video, but it produced errors when it rendered. 
-        Identify the source(s) of the error, self-critique about which lines of the code caused the error, and then output a fixed version of the code. 
+        Return a fixed version of the code. Update ONLY the part of the code that has the error; otherwise, return the full, original code intact.
+        IMPORTANT: You must use the exact same value for audio_path as it was in the original code.
 
         Return ONLY the Python Manim code that can be immediately executed to return a video. 
         Do not output any other text besides this code.
@@ -58,4 +59,4 @@ MANIM_CODE_PROMPT = '''You are an expert in creating educational animations usin
 # OpenAI model constants
 O3_MINI = "o3-mini-2025-01-31"
 O1_MINI = "o1-mini-2024-09-12"
-GPT_4O = "gpt-4o-2024-08-06"
+GPT_4O = "gpt-4o-2024-11-20"

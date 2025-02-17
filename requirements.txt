@@ -3,5 +3,5 @@ uvicorn==0.27.1
 manim==0.18.0
 python-multipart==0.0.18
 mutagen==1.47.0
-openai==1.61.0
+openai==1.63.0
 python-dotenv==1.0.1
