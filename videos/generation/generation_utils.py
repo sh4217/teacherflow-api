@@ -7,6 +7,8 @@ import shutil
 import os
 from dotenv import load_dotenv
 from fastapi import HTTPException
+import multiprocessing
+from itertools import cycle
 
 from audio.audio_utils import generate_audio
 from ai.ai_utils import generate_video_plan, generate_manim_scenes, retry_manim_scene_generation
@@ -43,6 +45,31 @@ async def prepare_video_prerequisites(
     
     await update_progress(30)
     return video_plan
+
+def analyze_parallel_distribution(scenes):
+    """
+    Analyze and log how scenes would be distributed across available CPU cores.
+    """
+    total_cores = multiprocessing.cpu_count()
+    # Use N-1 workers to leave one core free for system processes
+    num_workers = max(1, total_cores - 1)
+    
+    print(f"\n=== Parallel Processing Analysis ===")
+    print(f"Total CPU cores available: {total_cores}")
+    print(f"Number of worker processes: {num_workers}")
+    print(f"Total scenes to process: {len(scenes)}")
+    
+    # Simulate distribution of scenes to workers
+    workers = list(range(num_workers))
+    scene_distribution = {i: [] for i in workers}
+    
+    for scene_idx, worker in zip(range(len(scenes)), cycle(workers)):
+        scene_distribution[worker].append(scene_idx + 1)
+    
+    print("\nProjected scene distribution:")
+    for worker_id, scene_list in scene_distribution.items():
+        print(f"Worker {worker_id + 1}: Scenes {scene_list} ({len(scene_list)} scenes)")
+    print("===================================\n")
 
 async def generate_and_render_video(
     video_plan: VideoPlan,
@@ -82,6 +109,9 @@ async def generate_and_render_video(
         video_code = generate_manim_scenes(video_plan)
         if not video_code or not video_code.scenes:
             raise HTTPException(status_code=500, detail="Failed to generate Manim scenes")
+
+        # Analyze potential parallel processing distribution
+        analyze_parallel_distribution(video_code.scenes)
         
         rendered_videos = []
         for i, scene in enumerate(video_code.scenes):
