@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Tuple, List
+from typing import Tuple, List, Dict, Any
 from uuid import uuid4
 import tempfile
 import subprocess
@@ -9,6 +9,8 @@ from dotenv import load_dotenv
 from fastapi import HTTPException
 import multiprocessing
 from itertools import cycle
+import asyncio
+from concurrent.futures import ProcessPoolExecutor
 
 from audio.audio_utils import generate_audio
 from ai.ai_utils import generate_video_plan, generate_manim_scenes, retry_manim_scene_generation
@@ -71,6 +73,145 @@ def analyze_parallel_distribution(scenes):
         print(f"Worker {worker_id + 1}: Scenes {scene_list} ({len(scene_list)} scenes)")
     print("===================================\n")
 
+def render_single_scene(scene_data: Dict[str, Any]) -> List[Path]:
+    """
+    Worker function to render a single scene in a separate process.
+    Returns list of paths to rendered video files.
+    """
+    scene_idx = scene_data['scene_idx']
+    scene_code = scene_data['scene_code']
+    temp_dir_path = Path(scene_data['temp_dir'])
+    video_id = scene_data['video_id']
+    max_retries = scene_data['max_retries']
+    debug_mode = scene_data['debug_mode']
+    
+    # Create scene-specific directory
+    worker_dir = temp_dir_path / f"worker_{scene_idx + 1}"
+    worker_dir.mkdir(exist_ok=True)
+    
+    scene_attempt = 0
+    current_code = scene_code
+    
+    while scene_attempt <= max_retries:
+        try:
+            print(f"=== DEBUG: Rendering scene {scene_idx + 1} (attempt {scene_attempt + 1}) ===")
+            
+            # Write current scene code to file
+            scene_file = worker_dir / f"scene_{scene_idx + 1}.py"
+            with open(scene_file, "w") as f:
+                f.write(current_code)
+            
+            # Render individual scene
+            cmd = ["manim", "-qm", "-a", str(scene_file)]
+            try:
+                process = subprocess.Popen(
+                    cmd,
+                    cwd=worker_dir,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    start_new_session=True
+                )
+                stdout, stderr = process.communicate()
+                if process.returncode != 0:
+                    error_msg = f"Command output (stdout):\n{stdout}\nCommand output (stderr):\n{stderr}"
+                    print(f"=== ERROR: Scene {scene_idx + 1} rendering failed on attempt {scene_attempt + 1} ===")
+                    print(error_msg)
+                    
+                    if debug_mode:
+                        save_debug_files(Path(scene_data['generation_dir']), video_id, scene_data['json_content'], 
+                                      scene_code, scene_idx + 1, scene_attempt + 1, error_msg)
+                    
+                    raise subprocess.CalledProcessError(process.returncode, cmd, stdout, stderr)
+            except subprocess.CalledProcessError as e:
+                if scene_attempt == max_retries:
+                    raise
+                
+                # Try to fix just this scene
+                fixed_code = retry_manim_scene_generation(current_code, e.stderr)
+                if not fixed_code:
+                    raise HTTPException(status_code=500, detail=f"Failed to fix scene {scene_idx + 1} after error")
+                
+                current_code = fixed_code
+                scene_attempt += 1
+                continue
+            
+            # Find rendered video for this scene
+            scene_dir = worker_dir / "media" / "videos" / f"scene_{scene_idx + 1}" / "720p30"
+            scene_videos = sorted(list(scene_dir.glob("Scene_*.mp4")))
+            
+            if not scene_videos:
+                print(f"=== ERROR: No video file found for scene {scene_idx + 1} after successful render ===")
+                if scene_attempt == max_retries:
+                    raise HTTPException(status_code=500, detail=f"Scene {scene_idx + 1} rendered without errors but no video file was created")
+                scene_attempt += 1
+                continue
+            
+            print(f"=== DEBUG: Successfully rendered scene {scene_idx + 1} ===")
+            
+            if debug_mode:
+                save_debug_files(Path(scene_data['generation_dir']), video_id, scene_data['json_content'], 
+                               current_code, scene_idx + 1, scene_attempt + 1)
+            
+            return [(v, scene_idx) for v in scene_videos]
+            
+        except Exception as e:
+            print(f"=== ERROR: Unexpected error rendering scene {scene_idx + 1}: {str(e)} ===")
+            if scene_attempt == max_retries:
+                raise
+            scene_attempt += 1
+            continue
+    
+    raise Exception(f"Failed to render scene {scene_idx + 1} after all attempts")
+
+async def render_scenes_in_parallel(video_code, temp_dir_path: Path, video_id: str, 
+                                  generation_dir: Path, json_content: str, max_retries: int, 
+                                  debug_mode: bool) -> List[Path]:
+    """
+    Render all scenes in parallel using a process pool.
+    Returns ordered list of rendered video paths.
+    """
+    # Prepare scene data for parallel processing
+    scene_data_list = []
+    for i, scene in enumerate(video_code.scenes):
+        scene_data = {
+            'scene_idx': i,
+            'scene_code': scene.code,
+            'temp_dir': str(temp_dir_path),
+            'video_id': video_id,
+            'max_retries': max_retries,
+            'debug_mode': debug_mode,
+            'generation_dir': str(generation_dir) if generation_dir else None,
+            'json_content': json_content if debug_mode else None
+        }
+        scene_data_list.append(scene_data)
+    
+    # Create process pool and run scenes in parallel
+    num_workers = max(1, multiprocessing.cpu_count() - 1)
+    print(f"\n=== Starting parallel rendering with {num_workers} workers ===")
+    
+    loop = asyncio.get_event_loop()
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        # Submit all scenes for processing
+        futures = [
+            loop.run_in_executor(executor, render_single_scene, scene_data)
+            for scene_data in scene_data_list
+        ]
+        
+        # Wait for all scenes to complete
+        results = await asyncio.gather(*futures, return_exceptions=True)
+    
+    # Check for any errors and flatten results
+    rendered_videos = []
+    for result in results:
+        if isinstance(result, Exception):
+            raise result
+        rendered_videos.extend(result)
+    
+    # Sort by scene index and extract just the video paths
+    rendered_videos.sort(key=lambda x: x[1])
+    return [video[0] for video in rendered_videos]
+
 async def generate_and_render_video(
     video_plan: VideoPlan,
     update_progress: callable
@@ -88,7 +229,6 @@ async def generate_and_render_video(
     try:
         if DEBUG_MODE:
             json_content = video_plan.model_dump_json(indent=2)
-            # Save just the JSON file for debugging
             json_path = generation_dir / f"{video_id}.json"
             with open(json_path, 'w') as f:
                 f.write(json_content)
@@ -113,87 +253,14 @@ async def generate_and_render_video(
         # Analyze potential parallel processing distribution
         analyze_parallel_distribution(video_code.scenes)
         
-        rendered_videos = []
-        for i, scene in enumerate(video_code.scenes):
-            scene_attempt = 0
-            current_code = scene.code
-            
-            while scene_attempt <= max_retries:
-                try:
-                    print(f"=== DEBUG: Rendering scene {i + 1}/{len(video_code.scenes)} (attempt {scene_attempt + 1}) ===")
-                    
-                    # Write current scene code to file
-                    scene_file = temp_dir_path / f"scene_{i + 1}.py"
-                    with open(scene_file, "w") as f:
-                        f.write(current_code)
-                    
-                    # Render individual scene with proper resource cleanup
-                    cmd = ["manim", "-qm", "-a", str(scene_file)]
-                    try:
-                        # Use a separate process group to prevent affecting the main server
-                        process = subprocess.Popen(
-                            cmd,
-                            cwd=temp_dir_path,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,
-                            text=True,
-                            start_new_session=True  # This prevents the subprocess from sharing signal handlers
-                        )
-                        stdout, stderr = process.communicate()
-                        if process.returncode != 0:
-                            error_msg = f"Command output (stdout):\n{stdout}\nCommand output (stderr):\n{stderr}"
-                            print(f"=== ERROR: Scene {i + 1} rendering failed on attempt {scene_attempt + 1} ===")
-                            print(error_msg)
-                            
-                            if DEBUG_MODE:
-                                save_debug_files(generation_dir, video_id, json_content, scene.code, i + 1, scene_attempt + 1, error_msg)
-                            
-                            raise subprocess.CalledProcessError(process.returncode, cmd, stdout, stderr)
-                    except subprocess.CalledProcessError as e:
-                        if scene_attempt == max_retries:
-                            raise
-                        
-                        # Try to fix just this scene
-                        scene.code = retry_manim_scene_generation(scene.code, e.stderr)
-                        if not scene.code:
-                            raise HTTPException(status_code=500, detail=f"Failed to fix scene {i + 1} after error")
-                        
-                        current_code = scene.code  # Update current_code to match the retried scene code
-                        scene_attempt += 1
-                        continue
-                    
-                    # Find rendered video for this scene
-                    scene_dir = temp_dir_path / "media" / "videos" / f"scene_{i + 1}" / "720p30"
-
-                    # Match any scene number, but sort them to get in correct order
-                    scene_videos = sorted(list(scene_dir.glob("Scene_*.mp4")))
-                    
-                    if not scene_videos:
-                        print(f"=== ERROR: No video file found for scene {i + 1} after successful render ===")
-                        if scene_attempt == max_retries:
-                            raise HTTPException(status_code=500, detail=f"Scene {i + 1} rendered without errors but no video file was created")
-                        scene_attempt += 1
-                        continue
-                    
-                    # Add all videos in correct order
-                    rendered_videos.extend(scene_videos)
-                    print(f"=== DEBUG: Added {len(scene_videos)} videos to rendered_videos (total: {len(rendered_videos)}) ===")
-                    
-                    if DEBUG_MODE:
-                        save_debug_files(generation_dir, video_id, json_content, scene.code, i + 1, scene_attempt + 1)
-                    
-                    break  # Success, move to next scene
-                    
-                except Exception as e:
-                    print(f"=== ERROR: Unexpected error rendering scene {i + 1}: {str(e)} ===")
-                    if scene_attempt == max_retries:
-                        raise
-                    scene_attempt += 1
-                    continue
-            
-            # Update progress as each scene is rendered
-            progress = 60 + (30 * (i + 1) // len(video_code.scenes))
-            await update_progress(progress)
+        # Render all scenes in parallel
+        rendered_videos = await render_scenes_in_parallel(
+            video_code, temp_dir_path, video_id, generation_dir,
+            json_content if DEBUG_MODE else None, max_retries, DEBUG_MODE
+        )
+        
+        # Update progress after all scenes are rendered
+        await update_progress(90)
         
         # Concatenate all rendered scenes
         rendered_video = concatenate_scenes(rendered_videos, temp_dir_path, video_filename)
