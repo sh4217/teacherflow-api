@@ -190,7 +190,7 @@ async def render_scenes_in_parallel(video_code, temp_dir_path: Path, video_id: s
     num_workers = max(1, multiprocessing.cpu_count() - 1)
     print(f"\n=== Starting parallel rendering with {num_workers} workers ===")
     
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
         # Submit all scenes for processing
         futures = [
